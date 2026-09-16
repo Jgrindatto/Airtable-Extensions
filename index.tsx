@@ -1,851 +1,2478 @@
 import './style.css';
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  initializeBlock,
-  useBase,
-  useRecords,
-  useCustomProperties,
-} from '@airtable/blocks/interface/ui';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { initializeBlock, useBase, useRecords } from '@airtable/blocks/interface/ui';
 
 /**
- * Deal Pod Console — a business-focused interface over the same base/data as the
- * Poké Mart game element. Same use cases, different (professional) UX:
- *   1. Team Briefs  — browse pod members, open a member, page through their
- *      1-on-1 brief snapshots.
- *   2. Source Review — triage Source Records and set their Review Status
- *      (Accepted / Pending / Rejected). Accepted items move to their own tab.
- *
- * Data bindings mirror the game element exactly (same table ids + field-name
- * detection) so both interfaces stay in sync.
+ * Gen-I Poké Mart inspired — cream diamond floor, white + teal desks, bold black ink UI
  */
-
-const DEAL_TEAM_TABLE_ID = 'tbli97fs0V1Qex7zd';
-const BRIEF_SNAPSHOTS_TABLE_ID = 'tblLUnyyar0p4hruj';
-const SOURCE_RECORDS_TABLE_ID = 'tblSV1PcX8QizC5da';
-const DEALS_TABLE_ID = 'tblbri2zcKSTWBUDO';
-
-/**
- * Declare the tables this element depends on. Interface custom extensions only
- * get full field/record access to tables surfaced through custom properties, so
- * each table is bound here (defaulting to the correct table id).
- */
-function getCustomProperties(base: ReturnType<typeof useBase>) {
-  return [
-    {
-      key: 'dealTeamTable',
-      label: 'Deal Team',
-      type: 'table' as const,
-      defaultValue:
-        base.getTableByIdIfExists(DEAL_TEAM_TABLE_ID) ?? base.tables[0],
-    },
-    {
-      key: 'briefSnapshotsTable',
-      label: 'Brief Snapshots',
-      type: 'table' as const,
-      defaultValue:
-        base.getTableByIdIfExists(BRIEF_SNAPSHOTS_TABLE_ID) ?? base.tables[0],
-    },
-    {
-      key: 'sourceRecordsTable',
-      label: 'Source Records',
-      type: 'table' as const,
-      defaultValue:
-        base.getTableByIdIfExists(SOURCE_RECORDS_TABLE_ID) ?? base.tables[0],
-    },
-    {
-      key: 'dealsTable',
-      label: 'Deals',
-      type: 'table' as const,
-      defaultValue:
-        base.getTableByIdIfExists(DEALS_TABLE_ID) ?? base.tables[0],
-    },
-    {
-      key: 'calendarTable',
-      label: 'Calendar',
-      type: 'table' as const,
-      // Synced calendar table is named after the mailbox; match by name.
-      defaultValue:
-        base.tables.find((t) => /@/.test(t.name)) ?? base.tables[0],
-    },
-  ];
-}
-
-/** Neutral, professional palette (kept in JS so it renders regardless of the
- *  host's Tailwind config). */
-// Palette tuned to match the Poké Mart element: teal/blue world, bold dark
-// ink outlines, white dialog panels, and bright yellow/red accents.
-const T = {
-  bg: '#7e9bc6', // sky/wall blue backdrop
-  panel: '#ffffff', // dialog paper
-  headerBar: '#bcdcec', // shelf-teal header
-  border: '#1b2733', // dark ink outlines
-  borderStrong: '#101010', // pure ink
-  text: '#101010', // ink
+const PK = {
+  ink: '#101010',
+  wall: '#b8c8d8',
+  wallDeep: '#7890a8',
+  sky: '#a0c0e8',
+  skyDeep: '#6080c0',
+  floorBase: '#f8f8f0',
+  floorDark: '#e8e8d8',
+  floorDiamondLine: 'rgba(16, 24, 32, 0.11)',
+  deskTop: '#f8f8f8',
+  deskFace: '#7898b8',
+  deskFaceDark: '#506878',
+  deskTrim: '#202830',
+  deskRegister: '#d8f0ff',
+  door: '#a8c8e8',
+  doorSill: '#303848',
+  shelfTop: '#f0f8f8',
+  shelfMid: '#b8d8e8',
+  shelfDeep: '#88b0c8',
+  shelfAccent: '#e05858',
+  dialogPaper: '#ffffff',
+  dialogInner: '#f8fcff',
+  dialogBorder: '#101010',
+  text: '#101010',
   textMuted: '#485868',
-  textSubtle: '#7890a8', // wallDeep
-  accent: '#34548f', // deep pokemart blue
-  accentText: '#27406f',
-  accentSoft: '#d8f0ff', // desk register light blue
-  hint: '#f8e850', // pokemart yellow
-  rowHover: '#eef5fc',
-  selected: '#cfe6f5',
-  green: '#2f8f4e',
-  greenSoft: '#e2f4e9',
-  greenText: '#1f7a3d',
-  greenBorder: '#1b2733',
-  amberSoft: '#f7ea90',
-  amberText: '#6b5600',
-  amberBorder: '#1b2733',
-  redSoft: '#f6cccc',
-  redText: '#bb2a26',
-  redBorder: '#1b2733',
+  hint: '#f8e850',
+  white: '#ffffff',
+  pokeballRed: '#e83038',
+  scanline: 'rgba(24, 32, 48, 0.06)',
 } as const;
 
-const FONT =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+/** Tile grid — top-down, y grows downward */
+const COLS = 18;
+const ROWS = 13;
+const TILE = 28;
 
-// ---------------------------------------------------------------------------
-// Generic field/record helpers (defensive — the SDK throws on odd field types).
-// ---------------------------------------------------------------------------
+/** Single-tile exit at bottom center */
+const DOOR_X = Math.floor(COLS / 2);
 
-type AnyTable = ReturnType<ReturnType<typeof useBase>['getTableByIdIfExists']>;
-type AnyRecords = ReturnType<typeof useRecords>;
-type AnyField = { id: string; name: string; type?: unknown; isPrimaryField?: boolean };
-type AnyRecord = {
-  id: string;
-  getCellValueAsString: (f: unknown) => string;
-  getCellValue: (f: unknown) => unknown;
+/** Mart counter: clerk north of aisle, 3×2 slab directly south */
+type DeskStation = {
+  readonly clerk: { readonly x: number; readonly y: number };
+  readonly slabs: readonly [number, number][];
 };
 
-function readStr(record: unknown, field: unknown): string {
-  if (!record || !field) return '';
-  try {
-    return (record as AnyRecord).getCellValueAsString(field) || '';
-  } catch {
-    return '';
+/**
+ * Cashier stations evenly spread along the back wall between the corner Poké-Ball
+ * shelves. Clerks at y=1 (touching top wall); 3×2 counters extend south to y=2-3.
+ * Customer aisle starts at y=4, leaving the full middle/lower room open.
+ */
+const ROOM_DESK_CLERKS: readonly [number, number][] = [
+  [4, 1],
+  [7, 1],
+  [10, 1],
+  [13, 1],
+];
+
+/**
+ * Open floor tiles for pod members beyond the four counter clerks. Each tile is
+ * unique so sprites never overlap (which would otherwise make the faced member
+ * ambiguous). Spaced on odd columns so the player can weave between them, and
+ * the Source Records terminal approach tile [3,7] is kept clear.
+ */
+const STANDEE_SPOTS: readonly [number, number][] = (() => {
+  const out: [number, number][] = [];
+  // Skip column 9 to keep the central exit aisle clear.
+  const xs = [3, 5, 7, 11, 13];
+  const ys = [5, 7, 9, 6, 8, 10];
+  for (const y of ys) {
+    for (const x of xs) {
+      if (x === 3 && y === 7) continue;
+      out.push([x, y]);
+    }
   }
-}
+  return out;
+})();
 
-function readRaw(record: unknown, field: unknown): unknown {
-  if (!record || !field) return null;
-  try {
-    return (record as AnyRecord).getCellValue(field);
-  } catch {
-    return null;
+function slabsSouthOfClerk(cx: number, clerkY: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const dy of [1, 2] as const) {
+    for (let dx = -1; dx <= 1; dx++)
+      out.push([cx + dx, clerkY + dy]);
   }
+  return out;
 }
 
-/** Linked-record cell values may be { id } objects or raw id strings. */
-function linkedIds(record: unknown, field: unknown): string[] {
-  const v = readRaw(record, field);
-  if (!Array.isArray(v)) return [];
-  return v
-    .map((l) => (typeof l === 'string' ? l : (l as { id?: string } | null)?.id ?? ''))
-    .filter(Boolean);
+function deskStationsForNpcCount(count: number): DeskStation[] {
+  const n = Math.min(Math.max(count, 0), ROOM_DESK_CLERKS.length);
+  return ROOM_DESK_CLERKS.slice(0, n).map(([cx, cy]) => ({
+    clerk: { x: cx, y: cy },
+    slabs: slabsSouthOfClerk(cx, cy),
+  }));
 }
 
-/** Whether the current user can edit records on the given table. */
-function canEdit(table: AnyTable): boolean {
-  const t = table as { hasPermissionToUpdateRecords?: () => boolean } | null;
-  if (!t || typeof t.hasPermissionToUpdateRecords !== 'function') return true;
-  try {
-    return t.hasPermissionToUpdateRecords();
-  } catch {
-    return false;
+function deskSlabKeySet(stations: readonly DeskStation[]): Set<string> {
+  const s = new Set<string>();
+  for (const st of stations) {
+    for (const [sx, sy] of st.slabs) s.add(keyXY(sx, sy));
   }
+  return s;
 }
 
-/** Numeric value of a currency/number cell (defensive against string cells). */
-function numVal(record: unknown, field: unknown): number {
-  const v = readRaw(record, field);
-  if (typeof v === 'number') return v;
-  const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
-  return Number.isNaN(n) ? 0 : n;
+function deskStationOwningTile(
+  x: number,
+  y: number,
+  stations: readonly DeskStation[],
+): DeskStation | undefined {
+  return stations.find((st) => st.slabs.some(([sx, sy]) => sx === x && sy === y));
 }
 
-/** Compact money format for column/pipeline roll-ups ($1.2M, $850K, $1,234). */
-function formatMoney(n: number): string {
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
-  if (abs >= 1_000) return `$${(n / 1_000).toFixed(abs >= 10_000 ? 0 : 1)}K`;
-  return `$${Math.round(n).toLocaleString()}`;
-}
+/** Floor props Ash cannot walk through */
+const FURNITURE_TILES: readonly [number, number][] = [
+  // Trash can wedged between the two east-wall terminals
+  [15, 8],
+  // Symmetric pair of plants in the front corners
+  [3, 11],
+  [14, 11],
+  // Centered merchandise pedestal just inside the door
+  [8, 11],
+];
 
-// --- Calendar helpers -------------------------------------------------------
+/**
+ * Interactive Poké Computer stations along the east-wall interior.
+ * Each station occupies two adjacent floor tiles (the PixelPokeComputer SVG
+ * is ~2 tiles wide); all listed tiles are collision-blocked. Player faces any
+ * tile in `tiles` to interact.
+ */
+type ComputerStationKey = 'events' | 'risky-deals' | 'source-records';
 
-const TIME_OPTS: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+type ComputerStation = {
+  readonly key: ComputerStationKey;
+  readonly tiles: readonly [number, number][];
+  /** Top-left tile of the visual DecorLayer footprint. */
+  readonly anchor: { readonly x: number; readonly y: number };
+  readonly wTiles: number;
+  readonly label: string;
+  readonly terminalTitle: string;
+  readonly promptText: string;
+  readonly tableId: string;
+  readonly primaryFieldId: string;
+  /** 1-2 fields shown as a single-line subtitle in the list view. */
+  readonly subtitleFieldIds: readonly string[];
+  /** Fields shown in the full record detail view (in order). */
+  readonly detailFieldIds: readonly string[];
+  /** Whether approaching + ENTER opens this terminal. */
+  readonly interactive?: boolean;
+};
 
-function eventDate(rec: unknown, field: unknown): Date | null {
-  const v = readRaw(rec, field);
-  if (typeof v === 'string' && v) {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
+const COMPUTER_STATIONS: readonly ComputerStation[] = [
+  {
+    key: 'events',
+    tiles: [
+      [15, 5],
+      [16, 5],
+    ],
+    anchor: { x: 15, y: 5 },
+    wTiles: 2,
+    label: 'EVENTS',
+    terminalTitle: 'EVENTS TERMINAL',
+    promptText: 'Access event records?',
+    interactive: false,
+    tableId: 'tblj9MAQUn7dJkXSc',
+    primaryFieldId: 'fldbfHTeezN3I9MlT',
+    subtitleFieldIds: ['fld9SwwWKqXBgbYKY', 'flddoNIObYEKbiCZF'],
+    detailFieldIds: [
+      'fld9SwwWKqXBgbYKY',
+      'fld4ApTVZVKR8TWuu',
+      'fldsmprgVNejxLGrN',
+      'flddoNIObYEKbiCZF',
+      'fldAgqyUFNRxyku9h',
+      'fldW5zwO7KNvRcmrY',
+      'fldtn956UiytU6I3a',
+    ],
+  },
+  {
+    key: 'risky-deals',
+    tiles: [
+      [15, 10],
+      [16, 10],
+    ],
+    anchor: { x: 15, y: 10 },
+    wTiles: 2,
+    label: 'RISKY DEALS',
+    terminalTitle: 'RISKY DEALS TERMINAL',
+    promptText: 'Access deal records?',
+    interactive: false,
+    tableId: 'tbl3zFP1BTUFbfxJz',
+    primaryFieldId: 'fldqZPIPatVhrRxkE',
+    subtitleFieldIds: ['fldtivLo1qgbpu029', 'fldnk9eWpRZjBL3N3'],
+    detailFieldIds: [
+      'fldtivLo1qgbpu029',
+      'fldnk9eWpRZjBL3N3',
+      'fld5NQHfP4rxmYEF3',
+      'fldD8kNNnWJa2saf7',
+      'fldQOutlqNyrpf4jN',
+      'fldA3V8IZkn8eTG6z',
+      'fldW7bZO5FIQPBHm2',
+      'fldVsJDF81iqq8Idp',
+      'fldhPyh7TPuXaoawN',
+    ],
+  },
+  {
+    key: 'source-records',
+    tiles: [
+      [1, 7],
+      [2, 7],
+    ],
+    anchor: { x: 1, y: 7 },
+    wTiles: 2,
+    label: 'SOURCE RECORDS',
+    terminalTitle: 'SOURCE RECORDS TERMINAL',
+    promptText: 'Review source records?',
+    interactive: true,
+    tableId: 'tblSV1PcX8QizC5da',
+    primaryFieldId: '',
+    subtitleFieldIds: [],
+    detailFieldIds: [],
+  },
+];
+
+function computerStationAtTile(x: number, y: number): ComputerStation | null {
+  for (const s of COMPUTER_STATIONS) {
+    for (const [tx, ty] of s.tiles) {
+      if (tx === x && ty === y) return s;
+    }
   }
   return null;
 }
 
-function eventTimeLabel(
-  rec: unknown,
-  startF: unknown,
-  endF: unknown,
-  allDayF: unknown
-): string {
-  const s = eventDate(rec, startF);
-  if (!s) return '';
-  if (readRaw(rec, allDayF)) return 'All day';
-  const e = eventDate(rec, endF);
-  return e
-    ? `${s.toLocaleTimeString([], TIME_OPTS)} – ${e.toLocaleTimeString([], TIME_OPTS)}`
-    : s.toLocaleTimeString([], TIME_OPTS);
-}
+/** Bezel inset around TileLayer (matches JSX padding on bezel div). */
+const BEZEL_PAD = 6;
 
-function startOfWeek(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  x.setDate(x.getDate() - x.getDay());
-  return x;
-}
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-function sameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+type Direction = 'up' | 'down' | 'left' | 'right';
 
-type CalendarBundle = {
-  table: AnyTable;
-  title: AnyField | null;
-  start: AnyField | null;
-  end: AnyField | null;
-  allDay: AnyField | null;
-  activityType: AnyField | null;
-  logActivity: AnyField | null;
-  opportunity: AnyField | null;
-  location: AnyField | null;
+const DIR_VEC: Record<Direction, { dx: number; dy: number }> = {
+  up: { dx: 0, dy: -1 },
+  down: { dx: 0, dy: 1 },
+  left: { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
 };
 
-function fieldsOf(table: AnyTable): AnyField[] {
-  return ((table as { fields?: AnyField[] } | null)?.fields ?? []) as AnyField[];
+function keyXY(x: number, y: number) {
+  return `${x},${y}`;
 }
 
-function primaryField(table: AnyTable): AnyField | null {
-  const fields = fieldsOf(table);
-  return fields.find((f) => f.isPrimaryField) ?? fields[0] ?? null;
-}
-
-function fieldByName(table: AnyTable, name: string): AnyField | null {
-  const t = table as { getFieldIfExists?: (n: string) => AnyField | null } | null;
-  if (t?.getFieldIfExists) {
-    try {
-      const f = t.getFieldIfExists(name);
-      if (f) return f;
-    } catch {
-      /* fall through to a manual scan */
-    }
+/** Single tag above sprites: first given name (“Jane Doe” → “Jane”; “Doe, Jane” → “Jane”). */
+function labelFirstName(raw: string): string {
+  const t = raw.trim();
+  if (!t) return '—';
+  if (/,/.test(t)) {
+    const bits = t.split(',').map((s) => s.trim()).filter(Boolean);
+    const tail = bits.slice(1).join(', ').trim();
+    const pick = tail || bits[0] || t;
+    return pick.split(/\s+/)[0] ?? pick;
   }
-  // Fall back to scanning the table's fields by name (case/space-insensitive),
-  // since getFieldIfExists can return null in some element contexts even when
-  // the field is present on the table.
-  const target = name.trim().toLowerCase();
-  return (
-    fieldsOf(table).find((f) => (f.name ?? '').trim().toLowerCase() === target) ??
-    null
-  );
+  return t.split(/\s+/)[0] ?? t;
 }
 
-/** Best single-select field that looks like a review/approval status. */
-function reviewStatusField(table: AnyTable): AnyField | null {
-  const selects = fieldsOf(table).filter((f) => String(f.type) === 'singleSelect');
-  const score = (name: string) => {
-    const s = name.toLowerCase();
-    if (/review\s*status/.test(s)) return 4;
-    if (s.includes('review')) return 3;
-    if (s.includes('status')) return 2;
-    if (s.includes('approv')) return 1;
-    return 0;
-  };
-  let best: AnyField | null = null;
-  let bestScore = -1;
-  for (const f of selects) {
-    const sc = score(f.name);
-    if (sc > bestScore) {
-      bestScore = sc;
-      best = f;
-    }
+type GameNpc = {
+  recordId: string;
+  name: string;
+  x: number;
+  y: number;
+};
+
+/** In-progress slide from one tile to another (fractional screen position lerps fx→tx). */
+type PlayerMotion = {
+  fx: number;
+  fy: number;
+  tx: number;
+  ty: number;
+  /** performance.now() at move start */
+  start: number;
+};
+
+/** Tweens Ash between tile centers (~8px/tile-ish feel at TILE=28). */
+const MOVE_GRID_MS = 135;
+
+function smoothstep01(t: number): number {
+  const x = Math.min(Math.max(t, 0), 1);
+  return x * x * (3 - 2 * x);
+}
+
+function buildBlockedCells(npcs: GameNpc[]): Set<string> {
+  const blocked = new Set<string>();
+  const add = (x: number, y: number) => blocked.add(keyXY(x, y));
+
+  for (let x = 0; x < COLS; x++) add(x, 0);
+
+  for (let x = 0; x < COLS; x++) {
+    if (x !== DOOR_X) add(x, ROWS - 1);
   }
-  return best;
+
+  for (let y = 0; y < ROWS; y++) {
+    add(0, y);
+    add(COLS - 1, y);
+  }
+
+  for (const [sx, sy] of [
+    [1, 1],
+    [2, 1],
+    [1, 2],
+    [2, 2],
+    [COLS - 2, 1],
+    [COLS - 3, 1],
+    [COLS - 2, 2],
+    [COLS - 3, 2],
+  ] as const) {
+    add(sx, sy);
+  }
+
+  const deskTiles = deskSlabKeySet(deskStationsForNpcCount(npcs.length));
+  for (const dk of deskTiles) blocked.add(dk);
+
+  for (const npc of npcs) add(npc.x, npc.y);
+  for (const [fx, fy] of FURNITURE_TILES) add(fx, fy);
+  for (const station of COMPUTER_STATIONS) {
+    for (const [tx, ty] of station.tiles) add(tx, ty);
+  }
+  return blocked;
 }
 
-function choicesOf(field: AnyField | null): Array<{ id: string; name: string }> {
-  const opts = (field as { options?: { choices?: Array<{ id: string; name: string }> } } | null)
-    ?.options;
-  return opts?.choices ?? [];
-}
-
-function statusTheme(name: string): { bg: string; color: string; border: string } {
-  const s = name.toLowerCase();
-  if (/accept|approv|done|complete|won/.test(s))
-    return { bg: T.greenSoft, color: T.greenText, border: T.greenBorder };
-  if (/reject|declin|denied|lost/.test(s))
-    return { bg: T.redSoft, color: T.redText, border: T.redBorder };
-  if (/pending|review|progress|open|unverified/.test(s))
-    return { bg: T.amberSoft, color: T.amberText, border: T.amberBorder };
-  return { bg: '#f3f4f6', color: T.textMuted, border: T.border };
-}
-
-// ---------------------------------------------------------------------------
-// Shared small UI pieces
-// ---------------------------------------------------------------------------
-
-/** Basic inline markdown: **bold**. */
-function renderInline(s: string): React.ReactNode {
-  const parts = s.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((p, i) =>
-    /^\*\*[^*]+\*\*$/.test(p) ? (
-      <strong key={i}>{p.slice(2, -2)}</strong>
-    ) : (
-      <React.Fragment key={i}>{p}</React.Fragment>
-    )
-  );
+function facingCell(px: number, py: number, dir: Direction) {
+  const { dx, dy } = DIR_VEC[dir];
+  return { x: px + dx, y: py + dy };
 }
 
 /**
- * Renders a block of brief text readably: blank lines break paragraphs,
- * `-`/`*`/`•` lines become bullet lists, `#`/`Heading:` lines become
- * subheadings, and **bold** is honored.
+ * Game Boy overworld — thick black silhouette, four gray ramps.
+ * '#' outline, '.' empty, '1' dark, '2' mid, '3' highlight/skin.
  */
-function RichText({ text, size = 13 }: { text: string; size?: number }) {
-  const lines = text.split(/\r?\n/);
-  const blocks: React.ReactNode[] = [];
-  let bullets: string[] = [];
-  let key = 0;
+const GB_GRAY = ['#17181a', '#4a5158', '#8e959c', '#e4e8ec'] as const;
 
-  const flush = () => {
-    if (!bullets.length) return;
-    blocks.push(
-      <ul
-        key={`u${key++}`}
-        style={{ margin: '2px 0 8px', paddingLeft: 18 }}
-      >
-        {bullets.map((b, i) => (
-          <li key={i} style={{ marginBottom: 3, lineHeight: 1.55 }}>
-            {renderInline(b)}
-          </li>
-        ))}
-      </ul>
-    );
-    bullets = [];
-  };
+/** Pure Gen-I 4-tone grayscale palette */
+const GB_SPRITE_PX: Record<string, string> = {
+  '#': GB_GRAY[0],
+  '1': GB_GRAY[1],
+  '2': GB_GRAY[2],
+  '3': GB_GRAY[3],
+};
 
-  for (const raw of lines) {
-    const t = raw.trim();
-    if (!t) {
-      flush();
-      continue;
-    }
-    const bullet = t.match(/^[-*•]\s+(.*)/);
-    if (bullet) {
-      bullets.push(bullet[1]);
-      continue;
-    }
-    flush();
-    const heading = t.match(/^#{1,6}\s+(.*)/);
-    if (heading || /^[^:]{1,48}:$/.test(t)) {
-      blocks.push(
-        <div
-          key={`h${key++}`}
-          style={{
-            fontWeight: 700,
-            color: T.text,
-            marginTop: 8,
-            marginBottom: 2,
-          }}
-        >
-          {renderInline(heading ? heading[1] : t)}
-        </div>
+function gbBits(rows: readonly string[]): React.ReactElement[] {
+  const out: React.ReactElement[] = [];
+  let idx = 0;
+  rows.forEach((line, y) =>
+    [...line].forEach((ch, x) => {
+      const fill = GB_SPRITE_PX[ch];
+      if (fill === undefined) return;
+      out.push(
+        <rect
+          key={idx++}
+          x={x}
+          y={y}
+          width={1}
+          height={1}
+          fill={fill}
+        />
       );
-      continue;
-    }
-    blocks.push(
-      <p
-        key={`p${key++}`}
-        style={{ margin: '0 0 8px', lineHeight: 1.6 }}
-      >
-        {renderInline(t)}
-      </p>
-    );
-  }
-  flush();
-
-  return <div style={{ fontSize: size, color: T.text }}>{blocks}</div>;
+    })
+  );
+  return out;
 }
 
-function StatusPill({ label }: { label: string }) {
-  const s = statusTheme(label || '');
+/**
+ * Pokémon Red overworld sprites (grayscale ramps # / 1 / 2 / 3 only).
+ * Decoded from pret/pokered `gfx/sprites/red.png`: StandingDown slab 0×16 +
+ * WalkingDown 16×16; StandingBack = 8×8 tiles (5,4,7,6) TL/TR/BL/BR;
+ * StandingWest 32×16 + WalkingWest 80×16. Horizontally mirrored for facing east.
+ *
+ * Pokémon is © Nintendo/Creatures/Game Freak — community uses these assets for fidelity.
+ */
+const ASH_SOUTH_F0 = [
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '...#11111111#...',
+  '..###122221###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22#22#22##..',
+  '..###221122###..',
+  '.#22########22#.',
+  '.#22########22#.',
+  '..###11##11###..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+/** WalkingDown — strip at y=48 of red.png */
+const ASH_SOUTH_F1 = [
+  '................',
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '...#11111111#...',
+  '..###122221###..',
+  '..############..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '.###22#22#22##..',
+  '.#2##221122#1#..',
+  '..##########2#..',
+  '...##1####22##..',
+  '....###11#22#...',
+  '....#11##.##....',
+  '.....###........',
+] as const;
+
+/** Facing north (back to camera): StandingUp strip at y=16 — single 16×16 figure, not split */
+const ASH_NORTH_F0 = [
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '...#11111111#...',
+  '..##11111111##..',
+  '..###111111###..',
+  '.#2##########2#.',
+  '.#22########22#.',
+  '..##22####22##..',
+  '..####1111####..',
+  '.#2##1####1##2#.',
+  '.#2##112211##2#.',
+  '..####1111####..',
+  '...#1######1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+/** WalkingUp — strip at y=64 of red.png */
+const ASH_NORTH_F1 = [
+  '................',
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '...#11111111#...',
+  '..##11111111##..',
+  '..###111111###..',
+  '.#2##########2#.',
+  '.#22########22#.',
+  '.###22####22##..',
+  '.#2###1111####..',
+  '..###1####1#22#.',
+  '...##112211#22#.',
+  '....##1111####..',
+  '....#1####......',
+  '.....###........',
+] as const;
+
+/** Facing west — mirror for facing east (`scaleX(-1)`), identical to OG hardware. */
+const ASH_WEST_F0 = [
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '..##21111111#...',
+  '.#222211111###..',
+  '..##111#######..',
+  '...#2#22######..',
+  '...#2#22#22##...',
+  '...#2222222#....',
+  '....#1222##1#...',
+  '.....#####11#...',
+  '......##22#1#...',
+  '......##22#1#...',
+  '.....#11####....',
+  '.....#1111#.....',
+  '......####......',
+] as const;
+
+const ASH_WEST_F1 = [
+  '................',
+  '.....######.....',
+  '....#111111#....',
+  '...#11111111#...',
+  '..##21111111#...',
+  '.#222211111###..',
+  '..##111#######..',
+  '...#2#22######..',
+  '...#2#22#22##...',
+  '...#2222222#....',
+  '....#1222##1#...',
+  '.....######1#...',
+  '...######22##...',
+  '..#11#11#22#1#..',
+  '...#11#####11#..',
+  '....###....##...',
+] as const;
+
+/**
+ * Original AE clerk sprites — six distinct silhouettes, same Gen-I 4-tone
+ * grayscale rendering conventions as Ash (# outline, 1 dark, 2 mid, 3 highlight).
+ * F1 alternates legs for a subtle step animation.
+ */
+
+/** 1) CAP & APRON — rounded cap with brim band, apron front */
+const AE_CAP_APRON_F0 = [
+  '.....######.....',
+  '....##2222##....',
+  '...##222222##...',
+  '..############..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22#22#22##..',
+  '..##22####22##..',
+  '..###111111###..',
+  '.#11########11#.',
+  '.#11##2222##11#.',
+  '..###11##11###..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_CAP_APRON_F1 = [
+  '.....######.....',
+  '....##2222##....',
+  '...##222222##...',
+  '..############..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22#22#22##..',
+  '..##22####22##..',
+  '..###111111###..',
+  '.#11########11#.',
+  '.#11##2222##11#.',
+  '..###11##11###..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** 2) SPIKE PUNK — tall pointed hair, dark sweater */
+const AE_SPIKE_PUNK_F0 = [
+  '....#.#.#.#.....',
+  '....########....',
+  '...##########...',
+  '...##111111##...',
+  '..###111111###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..###221122###..',
+  '.#11########11#.',
+  '.#11########11#.',
+  '..###11##11###..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_SPIKE_PUNK_F1 = [
+  '....#.#.#.#.....',
+  '....########....',
+  '...##########...',
+  '...##111111##...',
+  '..###111111###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..###221122###..',
+  '.#11########11#.',
+  '.#11########11#.',
+  '..###11##11###..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** 3) TOPKNOT — small bun above the head, lighter top */
+const AE_TOPKNOT_F0 = [
+  '......####......',
+  '.....######.....',
+  '....##1111##....',
+  '...##111111##...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..###111111###..',
+  '.#22########22#.',
+  '.#22##2222##22#.',
+  '..###11##11###..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_TOPKNOT_F1 = [
+  '......####......',
+  '.....######.....',
+  '....##1111##....',
+  '...##111111##...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..###111111###..',
+  '.#22########22#.',
+  '.#22##2222##22#.',
+  '..###11##11###..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** 4) NERD GLASSES — combover hair, framed eyes, lab coat */
+const AE_NERD_GLASSES_F0 = [
+  '.....######.....',
+  '....########....',
+  '...##111##11#...',
+  '...#11111111#...',
+  '..###111111###..',
+  '..##2######2##..',
+  '.#2##22##22##2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.#11########11#.',
+  '.#11##2222##11#.',
+  '..#####22#####..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_NERD_GLASSES_F1 = [
+  '.....######.....',
+  '....########....',
+  '...##111##11#...',
+  '...#11111111#...',
+  '..###111111###..',
+  '..##2######2##..',
+  '.#2##22##22##2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.#11########11#.',
+  '.#11##2222##11#.',
+  '..#####22#####..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** 5) BERET — wide soft cap, sash collar */
+const AE_BERET_F0 = [
+  '....########....',
+  '..############..',
+  '....########....',
+  '...##111111##...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.#22########22#.',
+  '.#22########22#.',
+  '..###11##11###..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_BERET_F1 = [
+  '....########....',
+  '..############..',
+  '....########....',
+  '...##111111##...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.#22########22#.',
+  '.#22########22#.',
+  '..###11##11###..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** 6) BROAD VEST — bald, broader shoulders, belted vest */
+const AE_BROAD_VEST_F0 = [
+  '.....######.....',
+  '....#222222#....',
+  '...#22222222#...',
+  '...#22222222#...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.##11######11##.',
+  '.##11######11##.',
+  '..############..',
+  '...#1##11##1#...',
+  '...#111##111#...',
+  '....###..###....',
+] as const;
+
+const AE_BROAD_VEST_F1 = [
+  '.....######.....',
+  '....#222222#....',
+  '...#22222222#...',
+  '...#22222222#...',
+  '..###222222###..',
+  '..##2######2##..',
+  '.#2#22222222#2#.',
+  '.#2222#22#2222#.',
+  '..##22####22##..',
+  '..############..',
+  '.##11######11##.',
+  '.##11######11##.',
+  '..############..',
+  '...###1##1###...',
+  '....##....##....',
+  '....##....##....',
+] as const;
+
+/** Six distinct clerks cycling by record index (%). */
+const AE_VARIANT_FRAMES = [
+  { stand: AE_CAP_APRON_F0, step: AE_CAP_APRON_F1 },
+  { stand: AE_SPIKE_PUNK_F0, step: AE_SPIKE_PUNK_F1 },
+  { stand: AE_TOPKNOT_F0, step: AE_TOPKNOT_F1 },
+  { stand: AE_NERD_GLASSES_F0, step: AE_NERD_GLASSES_F1 },
+  { stand: AE_BERET_F0, step: AE_BERET_F1 },
+  { stand: AE_BROAD_VEST_F0, step: AE_BROAD_VEST_F1 },
+] as const;
+
+function npcRows(variantIndex: number, frame: 0 | 1): readonly string[] {
+  const pair = AE_VARIANT_FRAMES[variantIndex % AE_VARIANT_FRAMES.length];
+  return frame === 0 ? pair.stand : pair.step;
+}
+
+function ashRowsForFacing(frame: 0 | 1, dir: Direction): readonly string[] {
+  switch (dir) {
+    case 'down':
+      return frame === 0 ? ASH_SOUTH_F0 : ASH_SOUTH_F1;
+    case 'up':
+      return frame === 0 ? ASH_NORTH_F0 : ASH_NORTH_F1;
+    case 'left':
+    case 'right':
+      return frame === 0 ? ASH_WEST_F0 : ASH_WEST_F1;
+  }
+}
+
+function AshSpriteDraw({ frame, dir }: { frame: 0 | 1; dir: Direction }) {
+  const rows = ashRowsForFacing(frame, dir);
+  const flipX = dir === 'right';
   return (
-    <span
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      shapeRendering="crispEdges"
       style={{
-        display: 'inline-block',
-        fontSize: 11,
-        fontWeight: 600,
-        lineHeight: 1.4,
-        padding: '2px 8px',
-        borderRadius: 999,
-        backgroundColor: s.bg,
-        color: s.color,
-        border: `1px solid ${s.border}`,
-        whiteSpace: 'nowrap',
+        imageRendering: 'pixelated',
+        ...(flipX
+          ? { transform: 'scaleX(-1)', transformOrigin: '50% 50%' }
+          : {}),
       }}
     >
-      {label || 'Unreviewed'}
-    </span>
+      {gbBits(rows)}
+    </svg>
   );
 }
 
-function Avatar({ name }: { name: string }) {
-  const initials = (name || '?')
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('');
+function NpcGbSprite({ variant, frame }: { variant: number; frame?: 0 | 1 }) {
+  const rows = npcRows(variant, frame ?? 0);
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      shapeRendering="crispEdges"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      {gbBits(rows)}
+    </svg>
+  );
+}
+
+function PokeShelfDecor() {
+  return (
+    <svg
+      className="absolute inset-1"
+      viewBox="0 0 12 12"
+      style={{ opacity: 0.95 }}
+    >
+      <circle
+        cx="6"
+        cy="6"
+        r="4"
+        fill={PK.white}
+        stroke={PK.ink}
+        strokeWidth="1"
+      />
+      <path d="M6 2 V10" stroke={PK.ink} strokeWidth="1" />
+      <path
+        d="M2 6 Q6 2 10 6"
+        fill="none"
+        stroke={PK.shelfAccent}
+        strokeWidth="1.3"
+      />
+      <path d="M2 6 H10" stroke={PK.ink} strokeWidth="1" />
+      <circle cx="6" cy="4.8" r="1.2" fill={PK.ink} />
+    </svg>
+  );
+}
+
+function WallPosterDecor() {
+  return (
+    <svg
+      className="absolute inset-0.5"
+      viewBox="0 0 20 16"
+      preserveAspectRatio="xMidYMid meet"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      <rect x="2" y="1" width="16" height="14" fill="#d8c8a8" stroke={PK.ink} strokeWidth="1" />
+      <rect x="4" y="3" width="12" height="9" fill={PK.shelfMid} />
+      <circle cx="10" cy="7.5" r="3.5" fill={PK.white} stroke={PK.ink} strokeWidth="0.8" />
+      <path d="M6.5 7.5 H13.5" stroke={PK.ink} strokeWidth="0.8" />
+      <circle cx="10" cy="6.3" r="1" fill={PK.shelfAccent} />
+    </svg>
+  );
+}
+
+function PixelPlant() {
+  return (
+    <svg
+      width={22}
+      height={26}
+      viewBox="0 0 11 13"
+      shapeRendering="crispEdges"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      {/* Clay pot rim */}
+      <rect x="2.4" y="8" width="6.2" height="0.9" fill="#a85838" stroke={PK.ink} strokeWidth="0.4" />
+      {/* Pot body */}
+      <path
+        d="M 3 8.9 L 8 8.9 L 7.6 12.2 L 3.4 12.2 Z"
+        fill="#7a3818"
+        stroke={PK.ink}
+        strokeWidth="0.4"
+      />
+      <path d="M 3.3 9.4 L 7.7 9.4 L 7.55 10 L 3.45 10 Z" fill="#a85838" opacity="0.55" />
+      {/* Soil */}
+      <rect x="2.6" y="7.6" width="5.8" height="0.6" fill="#3a1e10" />
+      {/* Foliage clumps */}
+      <ellipse cx="5.5" cy="5" rx="3.8" ry="3.4" fill="#1c5028" stroke={PK.ink} strokeWidth="0.5" />
+      <ellipse cx="3.5" cy="4.2" rx="1.6" ry="2" fill="#1c5028" stroke={PK.ink} strokeWidth="0.4" />
+      <ellipse cx="7.5" cy="4.2" rx="1.6" ry="2" fill="#1c5028" stroke={PK.ink} strokeWidth="0.4" />
+      <ellipse cx="5.5" cy="2.6" rx="1.6" ry="1.9" fill="#1c5028" stroke={PK.ink} strokeWidth="0.4" />
+      {/* Lighter highlights */}
+      <ellipse cx="4.4" cy="4.2" rx="0.8" ry="1.1" fill="#3a8848" />
+      <ellipse cx="6.7" cy="4.5" rx="0.7" ry="1" fill="#3a8848" />
+      <ellipse cx="5.5" cy="5.8" rx="1" ry="0.8" fill="#3a8848" />
+      <ellipse cx="5.2" cy="3.5" rx="0.45" ry="0.6" fill="#60b070" />
+    </svg>
+  );
+}
+
+function PixelPokeComputer() {
+  return (
+    <svg
+      width={52}
+      height={28}
+      viewBox="0 0 26 14"
+      shapeRendering="crispEdges"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      {/* Wooden desk */}
+      <rect x="0" y="10.5" width="26" height="3.5" fill="#a87850" stroke={PK.ink} strokeWidth="0.6" />
+      <rect x="0" y="12.4" width="26" height="1.6" fill="#704830" />
+      <rect x="0" y="13.6" width="26" height="0.4" fill="#3a1e10" />
+      {/* Desk grain */}
+      <rect x="2" y="11.2" width="6" height="0.2" fill="#8a5e3a" opacity="0.7" />
+      <rect x="14" y="11.2" width="8" height="0.2" fill="#8a5e3a" opacity="0.7" />
+      {/* Monitor / PC casing */}
+      <rect x="3" y="1" width="20" height="10" fill="#f0e8d8" stroke={PK.ink} strokeWidth="0.6" />
+      {/* Casing top ridge */}
+      <rect x="3" y="2.4" width="20" height="0.35" fill={PK.ink} />
+      {/* Screen frame */}
+      <rect x="5" y="3.4" width="16" height="6" fill={PK.ink} />
+      {/* Screen glow */}
+      <rect x="5.7" y="4.1" width="14.6" height="4.6" fill="#1c4848" />
+      {/* Scan-line text */}
+      <rect x="6.3" y="4.6" width="6" height="0.35" fill="#60d0c0" />
+      <rect x="6.3" y="5.4" width="10" height="0.35" fill="#60d0c0" />
+      <rect x="6.3" y="6.2" width="4" height="0.35" fill="#60d0c0" />
+      <rect x="6.3" y="7" width="8" height="0.35" fill="#60d0c0" />
+      <rect x="6.3" y="7.8" width="5" height="0.35" fill="#60d0c0" />
+      {/* Cursor block */}
+      <rect x="12.3" y="7.8" width="0.7" height="0.45" fill="#a0f0d8" />
+      {/* Vent slits along bottom of casing */}
+      <rect x="5.2" y="10" width="2" height="0.35" fill="#888070" />
+      <rect x="8" y="10" width="2" height="0.35" fill="#888070" />
+      <rect x="10.8" y="10" width="2" height="0.35" fill="#888070" />
+      <rect x="13.6" y="10" width="2" height="0.35" fill="#888070" />
+      <rect x="16.4" y="10" width="2" height="0.35" fill="#888070" />
+      <rect x="19.2" y="10" width="2" height="0.35" fill="#888070" />
+      {/* Power LED */}
+      <circle cx="21.5" cy="2.05" r="0.45" fill="#e84040" stroke={PK.ink} strokeWidth="0.2" />
+      {/* Brand stripe */}
+      <rect x="5" y="2.9" width="3" height="0.25" fill="#c0b8a0" />
+    </svg>
+  );
+}
+
+function PixelTrashCan() {
+  return (
+    <svg
+      width={18}
+      height={22}
+      viewBox="0 0 9 11"
+      shapeRendering="crispEdges"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      {/* Lid knob */}
+      <rect x="4.1" y="0.4" width="0.8" height="0.6" fill="#383848" stroke={PK.ink} strokeWidth="0.3" />
+      {/* Lid */}
+      <rect x="1.4" y="1" width="6.2" height="1.2" fill="#383848" stroke={PK.ink} strokeWidth="0.4" />
+      <rect x="1.4" y="1.85" width="6.2" height="0.35" fill="#181828" />
+      {/* Body */}
+      <rect x="1.8" y="2.4" width="5.4" height="7.6" fill="#9098a8" stroke={PK.ink} strokeWidth="0.45" />
+      {/* Body bands */}
+      <rect x="1.8" y="4" width="5.4" height="0.35" fill="#404858" />
+      <rect x="1.8" y="6.6" width="5.4" height="0.35" fill="#404858" />
+      <rect x="1.8" y="9.3" width="5.4" height="0.35" fill="#404858" />
+      {/* Vertical highlight */}
+      <rect x="2.2" y="2.8" width="0.45" height="6.7" fill="#c8d0e0" />
+      {/* Base shadow */}
+      <rect x="1.8" y="9.65" width="5.4" height="0.35" fill="#3a4252" />
+    </svg>
+  );
+}
+
+function PixelDisplayTable() {
+  return (
+    <svg
+      width={24}
+      height={22}
+      viewBox="0 0 12 11"
+      shapeRendering="crispEdges"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      {/* Top rim */}
+      <rect x="1.4" y="6.3" width="9.2" height="0.9" fill="#704830" stroke={PK.ink} strokeWidth="0.4" />
+      {/* Pedestal */}
+      <rect x="2" y="7.1" width="8" height="3" fill="#a87850" stroke={PK.ink} strokeWidth="0.4" />
+      <rect x="2" y="8.5" width="8" height="1.5" fill="#704830" />
+      <rect x="2" y="9.6" width="8" height="0.4" fill="#3a1e10" />
+      {/* Pokeball */}
+      <circle cx="6" cy="3.6" r="2.5" fill={PK.white} stroke={PK.ink} strokeWidth="0.55" />
+      <path
+        d="M 3.5 3.6 A 2.5 2.5 0 0 1 8.5 3.6 Z"
+        fill={PK.shelfAccent}
+        stroke={PK.ink}
+        strokeWidth="0.55"
+      />
+      <line x1="3.5" y1="3.6" x2="8.5" y2="3.6" stroke={PK.ink} strokeWidth="0.5" />
+      <circle cx="6" cy="3.6" r="0.7" fill={PK.white} stroke={PK.ink} strokeWidth="0.5" />
+      <circle cx="6" cy="3.6" r="0.3" fill={PK.ink} />
+      {/* Highlights */}
+      <ellipse cx="5" cy="2.3" rx="0.55" ry="0.3" fill="#ffb0b0" />
+      <ellipse cx="5" cy="4.6" rx="0.6" ry="0.35" fill="#f0f0f0" />
+    </svg>
+  );
+}
+
+function WallClockDecor() {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const hours = now.getHours() % 12;
+  const minutes = now.getMinutes();
+  // Continuous angles so the hour hand drifts naturally between marks.
+  const minuteAngle = minutes * 6;
+  const hourAngle = hours * 30 + minutes * 0.5;
+
+  return (
+    <svg
+      className="absolute inset-1"
+      viewBox="0 0 10 10"
+      style={{ imageRendering: 'pixelated' }}
+    >
+      <circle cx="5" cy="5" r="4" fill="#f8f8f8" stroke={PK.ink} strokeWidth="0.6" />
+      <line
+        x1="5"
+        y1="5"
+        x2="5"
+        y2="2.5"
+        stroke={PK.ink}
+        strokeWidth="0.5"
+        transform={`rotate(${minuteAngle} 5 5)`}
+      />
+      <line
+        x1="5"
+        y1="5"
+        x2="5"
+        y2="3.5"
+        stroke={PK.ink}
+        strokeWidth="0.4"
+        transform={`rotate(${hourAngle} 5 5)`}
+      />
+      <circle cx="5" cy="5" r="0.4" fill={PK.shelfAccent} />
+    </svg>
+  );
+}
+
+function DecorLayer({
+  left,
+  top,
+  wTiles,
+  hTiles,
+  children,
+}: {
+  left: number;
+  top: number;
+  wTiles: number;
+  hTiles: number;
+  children?: React.ReactNode;
+}) {
   return (
     <div
+      className="absolute flex items-end justify-center pointer-events-none"
       style={{
-        width: 36,
-        height: 36,
-        borderRadius: 999,
-        flexShrink: 0,
-        backgroundColor: T.accentSoft,
-        color: T.accentText,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontSize: 13,
-        fontWeight: 700,
+        left: left * TILE,
+        top: top * TILE,
+        width: wTiles * TILE,
+        height: hTiles * TILE,
       }}
     >
-      {initials || '?'}
+      {children}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Brief view model
-// ---------------------------------------------------------------------------
+function MartDeskIslandGroup({ deskStations }: { deskStations: readonly DeskStation[] }) {
+  return (
+    <>
+      {deskStations.map((st) => {
+        const slabTop = Math.min(...st.slabs.map(([, sy]) => sy));
+        return (
+          <React.Fragment key={`island-${st.clerk.x}-${st.clerk.y}`}>
+            <DecorLayer
+              left={st.clerk.x - 1}
+              top={slabTop}
+              wTiles={3}
+              hTiles={2}
+            >
+              <svg
+                width={3 * TILE - 4}
+                height={2 * TILE - 4}
+                viewBox="0 0 81 53"
+                style={{ imageRendering: 'pixelated' }}
+              >
+                <rect
+                  x="4"
+                  y="3"
+                  width="73"
+                  height="21"
+                  fill={PK.deskTop}
+                  stroke={PK.ink}
+                  strokeWidth="3"
+                />
+                <rect
+                  x="6"
+                  y="6"
+                  width="69"
+                  height="4"
+                  fill={PK.deskFace}
+                  opacity={0.55}
+                />
+                <rect
+                  x="4"
+                  y="24"
+                  width="73"
+                  height="26"
+                  fill={PK.deskFace}
+                  stroke={PK.ink}
+                  strokeWidth="3"
+                />
+                <rect x="10" y="10" width="18" height="10" rx="1" fill={PK.deskRegister} stroke={PK.ink} strokeWidth="2" />
+                <rect x="54" y="12" width="14" height="6" rx="1" fill={PK.deskRegister} stroke={PK.ink} strokeWidth="2" />
+                <path
+                  d="M14 42 H67"
+                  stroke={PK.deskFaceDark}
+                  strokeWidth="2"
+                  strokeDasharray="4 3"
+                />
+              </svg>
+            </DecorLayer>
+          </React.Fragment>
+        );
+      })}
+    </>
+  );
+}
 
-type BriefView = {
+function RoomDecorations({ deskStations }: { deskStations: readonly DeskStation[] }) {
+  return (
+    <>
+      <MartDeskIslandGroup deskStations={deskStations} />
+      {/* Symmetric plants in the front corners */}
+      <DecorLayer left={3} top={11} wTiles={1} hTiles={1}>
+        <PixelPlant />
+      </DecorLayer>
+      <DecorLayer left={14} top={11} wTiles={1} hTiles={1}>
+        <PixelPlant />
+      </DecorLayer>
+      {/* Featured merchandise pedestal beside the exit */}
+      <DecorLayer left={8} top={11} wTiles={1} hTiles={1}>
+        <PixelDisplayTable />
+      </DecorLayer>
+      {/* Trash can between the two east-wall terminals */}
+      <DecorLayer left={15} top={8} wTiles={1} hTiles={1}>
+        <PixelTrashCan />
+      </DecorLayer>
+    </>
+  );
+}
+
+function TileLayer({ deskStations }: { deskStations: readonly DeskStation[] }) {
+  const tiles: React.ReactElement[] = [];
+  const dm = `${Math.floor(TILE / 3)}px`;
+  const floorDiamond: React.CSSProperties = {
+    backgroundImage: `
+      linear-gradient(45deg, ${PK.floorDiamondLine} 43%, transparent 43%, transparent 57%, ${PK.floorDiamondLine} 57%),
+      linear-gradient(-45deg, ${PK.floorDiamondLine} 43%, transparent 43%, transparent 57%, ${PK.floorDiamondLine} 57%)
+    `,
+    backgroundSize: `${dm} ${dm}`,
+  };
+
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const k = keyXY(x, y);
+      const floorAlt = (x + y) % 2 === 0;
+      let bg: string = floorAlt ? PK.floorBase : PK.floorDark;
+      let decoration: React.ReactNode = null;
+
+      const isTopWall = y === 0;
+      const isLeftWall = x === 0;
+      const isRightWall = x === COLS - 1;
+      const isBottomWall = y === ROWS - 1 && x !== DOOR_X;
+      const isDoorTile = y === ROWS - 1 && x === DOOR_X;
+      const shelfCorner =
+        ([1, 2].includes(x) && [1, 2].includes(y)) ||
+        ([COLS - 2, COLS - 3].includes(x) && [1, 2].includes(y));
+
+      const deskStation = deskStationOwningTile(x, y, deskStations);
+      const slabTopY =
+        deskStation === undefined ? undefined : Math.min(...deskStation.slabs.map(([, sy]) => sy));
+
+      let tileStyle: React.CSSProperties = {
+        width: TILE,
+        height: TILE,
+        boxSizing: 'border-box',
+        boxShadow: `inset 0 0 0 1px rgba(26,38,54,0.13)`,
+        backgroundColor: bg,
+      };
+
+      if (isTopWall || isLeftWall || isRightWall || isBottomWall) {
+        bg = PK.wallDeep;
+      } else if (isDoorTile) {
+        bg = PK.door;
+        decoration = (
+          <div
+            className="absolute inset-0 flex items-end justify-center pb-0.5"
+            style={{
+              borderTop: `5px solid ${PK.doorSill}`,
+              boxShadow: `inset 0 0 0 2px ${PK.wallDeep}`,
+              color: PK.white,
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '5px',
+              lineHeight: 1,
+              textShadow: `1px 1px 0 ${PK.ink}`,
+            }}
+          >
+            EXIT
+          </div>
+        );
+      } else if (deskStation !== undefined && slabTopY !== undefined) {
+        const isTopSlabRow = y === slabTopY;
+        bg = isTopSlabRow ? PK.deskTop : PK.deskFace;
+        decoration =
+          isTopSlabRow ? (
+            <>
+              <div
+                className="absolute left-0 right-0 top-0 pointer-events-none"
+                style={{
+                  height: '5px',
+                  backgroundColor: PK.deskFaceDark,
+                  opacity: 0.38,
+                }}
+              />
+              {x === deskStation.clerk.x ? (
+                <div
+                  className="absolute left-[18%] right-[18%] top-1 pointer-events-none"
+                  style={{
+                    height: '5px',
+                    backgroundColor: PK.deskTrim,
+                    opacity: 0.22,
+                  }}
+                />
+              ) : null}
+            </>
+          ) : (
+            <div
+              className="pointer-events-none absolute inset-x-2 top-2 bottom-2"
+              style={{
+                backgroundImage: `linear-gradient(${PK.deskFaceDark}aa 38%, transparent 38%)`,
+                backgroundSize: '100% 5px',
+                opacity: 0.85,
+              }}
+            />
+          );
+      } else if (shelfCorner) {
+        bg = y === 1 ? PK.shelfTop : PK.shelfDeep;
+        decoration = <PokeShelfDecor />;
+      }
+
+      if (isTopWall && (x === 5 || x === 12)) {
+        decoration = (
+          <>
+            {decoration}
+            <WallPosterDecor />
+          </>
+        );
+      }
+      if (isTopWall && x === DOOR_X) {
+        decoration = (
+          <>
+            {decoration}
+            <WallClockDecor />
+          </>
+        );
+      }
+      if (y === ROWS - 2 && x === DOOR_X && !isTopWall && !isDoorTile) {
+        decoration = (
+          <>
+            {decoration}
+            <div
+              className="absolute inset-2 rounded-sm"
+              style={{
+                border: `2px dashed ${PK.ink}`,
+                opacity: 0.42,
+                boxSizing: 'border-box',
+              }}
+            />
+          </>
+        );
+      }
+
+      tileStyle.backgroundColor = bg;
+
+      const isFloorDiamond =
+        !isTopWall &&
+        !isLeftWall &&
+        !isRightWall &&
+        !isBottomWall &&
+        !isDoorTile &&
+        !shelfCorner &&
+        deskStation === undefined;
+
+      if (isFloorDiamond) tileStyle = { ...tileStyle, ...floorDiamond };
+
+      tiles.push(
+        <div key={k} className="relative" style={tileStyle}>
+          {decoration}
+        </div>
+      );
+    }
+  }
+  return (
+    <div
+      className="absolute left-0 top-0 grid"
+      style={{
+        gridTemplateColumns: `repeat(${COLS}, ${TILE}px)`,
+        gridTemplateRows: `repeat(${ROWS}, ${TILE}px)`,
+        width: COLS * TILE,
+        height: ROWS * TILE,
+      }}
+    >
+      {tiles}
+    </div>
+  );
+}
+
+function NpcFigure({ name, variant }: { name: string; variant: number }) {
+  const tag = labelFirstName(name);
+  return (
+    <div
+      className="relative"
+      style={{
+        width: TILE,
+        height: TILE,
+        pointerEvents: 'none',
+      }}
+    >
+      <div
+        className="absolute left-1/2 z-[6]"
+        title={name}
+        style={{
+          bottom: TILE + 4,
+          maxWidth: 80,
+          padding: '1px 3px',
+          transform: 'translateX(-50%)',
+          transformOrigin: 'center bottom',
+          fontFamily: '"Press Start 2P", monospace',
+          fontSize: '5px',
+          lineHeight: 1.2,
+          color: PK.text,
+          backgroundColor: PK.dialogPaper,
+          border: `1px solid ${PK.ink}`,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          textAlign: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        {tag}
+      </div>
+      <div
+        className="absolute left-1/2 bottom-0"
+        style={{
+          transform: 'translateX(-50%)',
+          imageRendering: 'pixelated',
+        }}
+      >
+        <div
+          style={{
+            transform: 'scale(2)',
+            transformOrigin: '50% 80%',
+            imageRendering: 'pixelated',
+          }}
+        >
+          <NpcGbSprite variant={variant} frame={0} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SvgGen1DialogCornerBall({
+  sx,
+}: {
+  sx?: React.CSSProperties;
+}) {
+  return (
+    <svg
+      width={36}
+      height={36}
+      viewBox="0 0 32 32"
+      style={{ overflow: 'visible', imageRendering: 'pixelated', ...sx }}
+    >
+      <circle cx="16" cy="16" r="13" fill={PK.white} stroke={PK.ink} strokeWidth="4" />
+      <path d="M3 16 H29" stroke={PK.ink} strokeWidth="4" strokeLinecap="square" />
+      <path d="M3 16 A13 13 0 0 1 29 16 Z" fill={PK.pokeballRed} stroke={PK.ink} strokeWidth="2" />
+      <circle cx="16" cy="16" r="6" fill={PK.white} stroke={PK.ink} strokeWidth="3.5" />
+      <circle cx="16" cy="16" r="4" fill={PK.ink} stroke={PK.ink} strokeWidth="1.5" />
+      <circle cx="16" cy="16" r="2" fill={PK.dialogPaper} />
+    </svg>
+  );
+}
+
+function DialogBox({ children }: { children?: React.ReactNode }) {
+  const cornerSx = (corner: 'tl' | 'tr' | 'bl' | 'br'): React.CSSProperties => {
+    const base: React.CSSProperties = {
+      position: 'absolute',
+      width: 36,
+      height: 36,
+      pointerEvents: 'none',
+      zIndex: 2,
+    };
+    switch (corner) {
+      case 'tl':
+        return { ...base, top: -10, left: -10 };
+      case 'tr':
+        return {
+          ...base,
+          top: -10,
+          right: -10,
+          transform: 'scaleX(-1)',
+          transformOrigin: 'center',
+        };
+      case 'bl':
+        return {
+          ...base,
+          bottom: -10,
+          left: -10,
+          transform: 'scaleY(-1)',
+          transformOrigin: 'center',
+        };
+      case 'br':
+        return {
+          ...base,
+          bottom: -10,
+          right: -10,
+          transform: 'scale(-1)',
+          transformOrigin: 'center',
+        };
+    }
+  };
+
+  return (
+    <div
+      className="w-full"
+      style={{
+        backgroundColor: PK.wallDeep,
+        padding: '14px',
+        paddingBottom: '18px',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        className="relative mx-auto w-full max-w-none"
+        style={{
+          padding: '34px',
+          paddingTop: '42px',
+          paddingBottom: '38px',
+          backgroundColor: PK.dialogPaper,
+          border: `${7}px solid ${PK.dialogBorder}`,
+          boxShadow: `
+              inset 0 0 0 4px ${PK.dialogPaper},
+              inset 0 0 0 8px ${PK.dialogBorder}
+            `,
+          minHeight: '112px',
+        }}
+      >
+        <span style={cornerSx('tl')}>
+          <SvgGen1DialogCornerBall />
+        </span>
+        <span style={cornerSx('tr')}>
+          <SvgGen1DialogCornerBall />
+        </span>
+        <span style={cornerSx('bl')}>
+          <SvgGen1DialogCornerBall />
+        </span>
+        <span style={cornerSx('br')}>
+          <SvgGen1DialogCornerBall />
+        </span>
+        <div className="relative z-[3]">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+type BriefSnapshotView = {
   id: string;
   title: string;
   subtitle: string;
-  sortKey: string;
   sections: { label: string; value: string }[];
 };
 
-type Member = {
-  id: string;
-  name: string;
-  role: string;
-  briefs: BriefView[];
-};
-
-// ---------------------------------------------------------------------------
-// Team Briefs view
-// ---------------------------------------------------------------------------
-
-function BriefReader({ briefs }: { briefs: BriefView[] }) {
-  const [index, setIndex] = useState(0);
+function BriefViewer({
+  briefs,
+  aeName,
+  onClose,
+}: {
+  briefs: BriefSnapshotView[];
+  aeName: string;
+  onClose: () => void;
+}) {
   const total = briefs.length;
+  const [mode, setMode] = useState<'list' | 'detail'>('list');
+  const [index, setIndex] = useState(0);
+  const [listSel, setListSel] = useState(0);
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
 
+  // Start on the brief picker each time the viewer opens for a member.
   useEffect(() => {
+    setMode('list');
     setIndex(0);
-  }, [briefs]);
+    setListSel(0);
+  }, [aeName, total]);
 
-  const goPrev = useCallback(
-    () => setIndex((i) => (total === 0 ? 0 : (i - 1 + total) % total)),
-    [total]
-  );
-  const goNext = useCallback(
-    () => setIndex((i) => (total === 0 ? 0 : (i + 1) % total)),
-    [total]
-  );
+  const goPrev = useCallback(() => {
+    setIndex((i) => (total === 0 ? 0 : (i - 1 + total) % total));
+  }, [total]);
+  const goNext = useCallback(() => {
+    setIndex((i) => (total === 0 ? 0 : (i + 1) % total));
+  }, [total]);
+  const openAt = useCallback((i: number) => {
+    setIndex(i);
+    setMode('detail');
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') goPrev();
-      else if (e.key === 'ArrowRight') goNext();
+      if (e.key === 'b' || e.key === 'B') {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (mode === 'detail') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setListSel(index);
+          setMode('list');
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          goPrev();
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          goNext();
+        }
+        return;
+      }
+      // Brief picker (list mode).
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (total === 0) {
+        return;
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setListSel((i) => Math.min(i + 1, total - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setListSel((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        openAt(listSel);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [goPrev, goNext]);
+  }, [mode, index, listSel, total, goPrev, goNext, openAt, onClose]);
 
-  if (total === 0) {
-    return (
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: T.textMuted,
-          fontSize: 14,
-        }}
-      >
-        No briefs are attached to this team member yet.
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (mode !== 'list') return;
+    const root = listScrollRef.current;
+    if (!root) return;
+    const node = root.querySelector(
+      `[data-brief-idx="${listSel}"]`
+    ) as HTMLElement | null;
+    if (node) node.scrollIntoView({ block: 'nearest' });
+  }, [listSel, mode]);
 
-  const brief = briefs[Math.min(index, total - 1)];
+  const touchStartX = useRef<number | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.changedTouches[0]?.clientX ?? null;
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current == null) return;
+    const dx = (e.changedTouches[0]?.clientX ?? 0) - touchStartX.current;
+    if (Math.abs(dx) > 40) {
+      if (dx < 0) goNext();
+      else goPrev();
+    }
+    touchStartX.current = null;
+  };
+
+  const multiple = total > 1;
+  const brief = total > 0 ? briefs[Math.min(index, total - 1)] : null;
+  const inDetail = mode === 'detail' && !!brief;
+  const navBtnStyle: React.CSSProperties = {
+    fontFamily: '"Press Start 2P", monospace',
+    fontSize: '8px',
+    backgroundColor: PK.hint,
+    color: PK.ink,
+    border: `3px solid ${PK.ink}`,
+    boxShadow: `2px 2px 0 ${PK.ink}`,
+  };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Brief selector strip */}
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          padding: '0 0 14px 0',
-        }}
-      >
-        {briefs.map((b, i) => {
-          const active = i === index;
-          return (
-            <button
-              key={b.id}
-              type="button"
-              onClick={() => setIndex(i)}
-              style={{
-                cursor: 'pointer',
-                fontSize: 12,
-                fontWeight: 600,
-                padding: '6px 10px',
-                borderRadius: 8,
-                border: `1px solid ${active ? T.accent : T.border}`,
-                backgroundColor: active ? T.accent : T.panel,
-                color: active ? '#fff' : T.textMuted,
-              }}
-            >
-              {b.subtitle || b.title}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Reader card */}
+    <div
+      className="fixed inset-0 z-[100] flex flex-col items-stretch"
+      style={{
+        backgroundColor: PK.wallDeep,
+        padding: 14,
+        boxSizing: 'border-box',
+      }}
+    >
       <div
         style={{
           flex: 1,
           minHeight: 0,
-          overflowY: 'auto',
-          backgroundColor: T.panel,
-          border: `1px solid ${T.border}`,
-          borderRadius: 12,
-        }}
-      >
-        <div
-          style={{
-            position: 'sticky',
-            top: 0,
-            backgroundColor: T.panel,
-            borderBottom: `1px solid ${T.border}`,
-            padding: '16px 20px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 12,
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: T.text }}>{brief.title}</div>
-            {brief.subtitle && (
-              <div style={{ fontSize: 12, color: T.textMuted, marginTop: 2 }}>
-                {brief.subtitle}
-              </div>
-            )}
-          </div>
-          {total > 1 && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-              <button type="button" onClick={goPrev} style={iconBtnStyle}>
-                ‹
-              </button>
-              <span style={{ fontSize: 12, color: T.textMuted, minWidth: 44, textAlign: 'center' }}>
-                {index + 1} / {total}
-              </span>
-              <button type="button" onClick={goNext} style={iconBtnStyle}>
-                ›
-              </button>
-            </div>
-          )}
-        </div>
-
-        <div style={{ padding: '8px 20px 20px' }}>
-          {brief.sections.length === 0 ? (
-            <div style={{ color: T.textMuted, fontSize: 14, padding: '12px 0' }}>
-              This snapshot has no written content.
-            </div>
-          ) : (
-            brief.sections.map((s) => (
-              <div key={s.label} style={{ padding: '16px 0', borderBottom: `1px solid ${T.border}` }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    letterSpacing: 0.6,
-                    textTransform: 'uppercase',
-                    color: T.textSubtle,
-                    marginBottom: 6,
-                  }}
-                >
-                  {s.label}
-                </div>
-                <div style={{ wordBreak: 'break-word' }}>
-                  <RichText text={s.value} size={14} />
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const iconBtnStyle: React.CSSProperties = {
-  cursor: 'pointer',
-  width: 30,
-  height: 30,
-  borderRadius: 8,
-  border: `1px solid ${T.border}`,
-  backgroundColor: T.panel,
-  color: T.text,
-  fontSize: 18,
-  lineHeight: 1,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-function TeamBriefsView({ members }: { members: Member[] }) {
-  const [selectedId, setSelectedId] = useState<string | null>(
-    members[0]?.id ?? null
-  );
-
-  // Keep selection valid as data loads / changes.
-  useEffect(() => {
-    if (members.length === 0) {
-      setSelectedId(null);
-    } else if (!members.some((m) => m.id === selectedId)) {
-      setSelectedId(members[0].id);
-    }
-  }, [members, selectedId]);
-
-  const selected = members.find((m) => m.id === selectedId) ?? null;
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 20 }}>
-      {/* Member list */}
-      <div
-        style={{
-          width: 300,
-          flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
-          backgroundColor: T.panel,
-          border: `1px solid ${T.border}`,
-          borderRadius: 12,
-          overflow: 'hidden',
+          border: `8px solid ${PK.skyDeep}`,
+          outline: `5px solid ${PK.shelfMid}`,
+          boxShadow: `0 0 0 4px ${PK.ink}, 0 0 0 14px ${PK.shelfAccent}`,
+          backgroundColor: PK.ink,
         }}
       >
         <div
+          className="flex items-center justify-between gap-2 px-2 py-2 flex-shrink-0"
           style={{
-            padding: '14px 16px',
-            borderBottom: `1px solid ${T.border}`,
-            fontSize: 12,
-            fontWeight: 700,
-            letterSpacing: 0.4,
-            textTransform: 'uppercase',
-            color: T.textMuted,
+            backgroundColor: PK.shelfMid,
+            borderBottom: `4px solid ${PK.skyDeep}`,
           }}
         >
-          Pod Members · {members.length}
-        </div>
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          {members.length === 0 ? (
-            <div style={{ padding: 20, color: T.textMuted, fontSize: 14 }}>
-              No team members found.
-            </div>
-          ) : (
-            members.map((m) => {
-              const active = m.id === selectedId;
-              return (
+          <div
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '10px',
+              lineHeight: 1.6,
+              color: PK.dialogInner,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {aeName}
+            <span style={{ color: PK.hint }}>
+              {inDetail ? ' — BRIEF' : ' — BRIEFS'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {inDetail && (
+              <>
                 <button
-                  key={m.id}
                   type="button"
-                  onClick={() => setSelectedId(m.id)}
-                  style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12,
-                    padding: '12px 16px',
-                    border: 'none',
-                    borderBottom: `1px solid ${T.border}`,
-                    borderLeft: `3px solid ${active ? T.accent : 'transparent'}`,
-                    backgroundColor: active ? T.selected : T.panel,
+                  onClick={() => {
+                    setListSel(index);
+                    setMode('list');
                   }}
+                  className="cursor-pointer px-2 py-1"
+                  style={navBtnStyle}
                 >
-                  <Avatar name={m.name} />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div
+                  LIST
+                </button>
+                {multiple && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={goPrev}
+                      className="cursor-pointer px-2 py-1"
+                      style={navBtnStyle}
+                    >
+                      ◀
+                    </button>
+                    <span
                       style={{
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: T.text,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '8px',
+                        color: PK.dialogInner,
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {m.name}
-                    </div>
-                    <div style={{ fontSize: 12, color: T.textMuted }}>
-                      {m.role || 'Team member'}
-                    </div>
-                  </div>
-                  <span
+                      {index + 1}/{total}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={goNext}
+                      className="cursor-pointer px-2 py-1"
+                      style={navBtnStyle}
+                    >
+                      ▶
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="cursor-pointer px-2 py-1"
+              style={navBtnStyle}
+            >
+              B CLOSE
+            </button>
+          </div>
+        </div>
+
+        {!inDetail && (
+          <div
+            ref={listScrollRef}
+            className="flex-1 min-h-0 overflow-y-auto"
+            style={{ backgroundColor: PK.dialogInner }}
+          >
+            {total === 0 ? (
+              <div
+                className="flex items-center justify-center p-6 text-center"
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '9px',
+                  color: PK.text,
+                  minHeight: '100%',
+                }}
+              >
+                NO BRIEFS AVAILABLE FOR THIS MEMBER.
+              </div>
+            ) : (
+              briefs.map((b, i) => {
+                const sel = i === listSel;
+                return (
+                  <div
+                    key={b.id}
+                    data-brief-idx={i}
+                    onClick={() => {
+                      setListSel(i);
+                      openAt(i);
+                    }}
+                    onMouseEnter={() => setListSel(i)}
+                    className="cursor-pointer px-3 py-2"
                     style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      color: m.briefs.length ? T.accentText : T.textSubtle,
-                      backgroundColor: m.briefs.length ? T.accentSoft : '#f3f4f6',
-                      borderRadius: 999,
-                      padding: '2px 8px',
-                      flexShrink: 0,
+                      backgroundColor: sel ? PK.shelfMid : 'transparent',
+                      borderBottom: `2px solid ${PK.wallDeep}`,
+                      fontFamily: '"Press Start 2P", monospace',
                     }}
                   >
-                    {m.briefs.length}
-                  </span>
-                </button>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Brief area */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {!selected ? (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: T.textMuted,
-              fontSize: 14,
-            }}
-          >
-            Select a team member to view their briefs.
+                    <div
+                      style={{
+                        fontSize: '10px',
+                        color: PK.text,
+                        lineHeight: 1.5,
+                        letterSpacing: '0.5px',
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: PK.shelfAccent,
+                          width: 10,
+                          display: 'inline-block',
+                        }}
+                      >
+                        {sel ? '▶' : ' '}
+                      </span>
+                      <span
+                        style={{
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          flex: 1,
+                        }}
+                      >
+                        {b.title}
+                      </span>
+                    </div>
+                    {b.subtitle && (
+                      <div
+                        style={{
+                          fontSize: '7px',
+                          color: PK.textMuted,
+                          marginTop: 4,
+                          marginLeft: 16,
+                          lineHeight: 1.5,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {b.subtitle}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-              <Avatar name={selected.name} />
-              <div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: T.text }}>
-                  {selected.name}
-                </div>
-                <div style={{ fontSize: 13, color: T.textMuted }}>
-                  {selected.role ? `${selected.role} · ` : ''}
-                  {selected.briefs.length} brief
-                  {selected.briefs.length === 1 ? '' : 's'}
-                </div>
-              </div>
-            </div>
-            <BriefReader briefs={selected.briefs} />
-          </>
         )}
+
+        {inDetail && brief && (
+          <div
+            className="flex-1 min-h-0 overflow-y-auto"
+            style={{ backgroundColor: PK.dialogInner }}
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
+          >
+            <div className="p-4">
+              <div
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '11px',
+                  color: PK.shelfAccent,
+                  lineHeight: 1.5,
+                  marginBottom: 4,
+                  letterSpacing: '0.5px',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {brief.title}
+              </div>
+              {brief.subtitle && (
+                <div
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '7px',
+                    color: PK.textMuted,
+                    letterSpacing: '0.5px',
+                    marginBottom: 14,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {brief.subtitle}
+                </div>
+              )}
+              {brief.sections.length === 0 ? (
+                <div
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '9px',
+                    color: PK.textMuted,
+                  }}
+                >
+                  EMPTY BRIEF.
+                </div>
+              ) : (
+                brief.sections.map((s) => (
+                  <div
+                    key={s.label}
+                    style={{
+                      marginBottom: 12,
+                      paddingBottom: 10,
+                      borderBottom: `1px dashed ${PK.wallDeep}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '7px',
+                        color: PK.textMuted,
+                        letterSpacing: '1px',
+                        marginBottom: 4,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {s.label}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '10px',
+                        color: PK.text,
+                        lineHeight: 1.7,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {s.value}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        <div
+          className="py-1 text-center flex-shrink-0"
+          style={{
+            fontFamily: '"Press Start 2P", monospace',
+            fontSize: '6px',
+            color: PK.sky,
+            backgroundColor: PK.ink,
+          }}
+        >
+          {inDetail
+            ? multiple
+              ? '← → BRIEF · ESC LIST · B CLOSE'
+              : 'ESC LIST · B CLOSE'
+            : '↑↓ NAVIGATE · ENTER OPEN · B OR ESC CLOSE'}
+        </div>
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Source Review view
-// ---------------------------------------------------------------------------
+type ComputerTable = ReturnType<
+  ReturnType<typeof useBase>['getTableByIdIfExists']
+>;
+type ComputerRecords = ReturnType<typeof useRecords>;
 
-function SourceReviewView({
+function ComputerRecordBrowser({
+  station,
   table,
   records,
+  onClose,
 }: {
-  table: AnyTable;
-  records: AnyRecords;
+  station: ComputerStation;
+  table: ComputerTable;
+  records: ComputerRecords;
+  onClose: () => void;
 }) {
-  const [tab, setTab] = useState<'workflow' | 'accepted'>('workflow');
   const [query, setQuery] = useState('');
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [openRecordId, setOpenRecordId] = useState<string | null>(null);
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
+
+  const primaryField = table?.getFieldByIdIfExists(station.primaryFieldId) ?? null;
+
+  const subtitleFields = useMemo(() => {
+    if (!table) return [] as NonNullable<
+      ReturnType<NonNullable<ComputerTable>['getFieldByIdIfExists']>
+    >[];
+    const out: NonNullable<
+      ReturnType<NonNullable<ComputerTable>['getFieldByIdIfExists']>
+    >[] = [];
+    for (const id of station.subtitleFieldIds) {
+      const f = table.getFieldByIdIfExists(id);
+      if (f) out.push(f);
+    }
+    return out;
+  }, [table, station]);
+
+  const detailFields = useMemo(() => {
+    if (!table) return [] as NonNullable<
+      ReturnType<NonNullable<ComputerTable>['getFieldByIdIfExists']>
+    >[];
+    const out: NonNullable<
+      ReturnType<NonNullable<ComputerTable>['getFieldByIdIfExists']>
+    >[] = [];
+    for (const id of station.detailFieldIds) {
+      const f = table.getFieldByIdIfExists(id);
+      if (f) out.push(f);
+    }
+    return out;
+  }, [table, station]);
+
+  const recordList = records ?? [];
+
+  const safeRead = (record: unknown, field: unknown): string => {
+    if (!record || !field) return '';
+    try {
+      const r = record as { getCellValueAsString: (f: unknown) => string };
+      return r.getCellValueAsString(field) || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const searchableFields = useMemo(() => {
+    const all: unknown[] = [];
+    if (primaryField) all.push(primaryField);
+    for (const f of subtitleFields) all.push(f);
+    for (const f of detailFields) all.push(f);
+    return all;
+  }, [primaryField, subtitleFields, detailFields]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return recordList;
+    return recordList.filter((rec) => {
+      for (const f of searchableFields) {
+        const v = safeRead(rec, f);
+        if (v && v.toLowerCase().includes(q)) return true;
+      }
+      return false;
+    });
+  }, [recordList, searchableFields, query]);
+
+  useEffect(() => {
+    if (filtered.length === 0) {
+      setSelectedIdx(0);
+    } else if (selectedIdx >= filtered.length) {
+      setSelectedIdx(filtered.length - 1);
+    }
+  }, [filtered.length, selectedIdx]);
+
+  const openRecord = openRecordId
+    ? recordList.find((r) => r.id === openRecordId) ?? null
+    : null;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (openRecord) setOpenRecordId(null);
+        else onClose();
+        return;
+      }
+      if (openRecord) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIdx((i) =>
+          Math.min(i + 1, Math.max(filtered.length - 1, 0))
+        );
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const rec = filtered[selectedIdx];
+        if (rec) setOpenRecordId(rec.id);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openRecord, selectedIdx, filtered, onClose]);
+
+  useEffect(() => {
+    if (openRecord) return;
+    const root = listScrollRef.current;
+    if (!root) return;
+    const node = root.querySelector(
+      `[data-row-idx="${selectedIdx}"]`
+    ) as HTMLElement | null;
+    if (node) node.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx, openRecord]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex flex-col items-stretch"
+      style={{
+        backgroundColor: PK.wallDeep,
+        padding: 14,
+        boxSizing: 'border-box',
+        fontFamily: '"Press Start 2P", monospace',
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          border: `8px solid ${PK.skyDeep}`,
+          outline: `5px solid ${PK.shelfMid}`,
+          boxShadow: `0 0 0 4px ${PK.ink}, 0 0 0 14px ${PK.shelfAccent}`,
+          backgroundColor: PK.ink,
+        }}
+      >
+        <div
+          className="flex items-center justify-between gap-2 px-2 py-2 flex-shrink-0"
+          style={{
+            backgroundColor: PK.shelfMid,
+            borderBottom: `4px solid ${PK.skyDeep}`,
+          }}
+        >
+          <div
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '10px',
+              lineHeight: 1.6,
+              color: PK.dialogInner,
+              letterSpacing: '1px',
+            }}
+          >
+            <span style={{ color: PK.hint }}>{station.label}</span>
+            <span style={{ color: PK.dialogInner }}> — TERMINAL</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="cursor-pointer px-2 py-1"
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '8px',
+              backgroundColor: PK.hint,
+              color: PK.ink,
+              border: `3px solid ${PK.ink}`,
+              boxShadow: `2px 2px 0 ${PK.ink}`,
+            }}
+          >
+            ESC CLOSE
+          </button>
+        </div>
+
+        {!openRecord && (
+          <>
+            <div
+              className="flex items-center gap-2 px-3 py-2 flex-shrink-0"
+              style={{
+                backgroundColor: PK.dialogPaper,
+                borderBottom: `4px solid ${PK.dialogBorder}`,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '9px',
+                  color: PK.textMuted,
+                  letterSpacing: '1px',
+                }}
+              >
+                SEARCH
+              </span>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Type to filter..."
+                autoFocus
+                style={{
+                  flex: 1,
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '9px',
+                  backgroundColor: PK.dialogInner,
+                  color: PK.text,
+                  border: `3px solid ${PK.dialogBorder}`,
+                  padding: '6px 8px',
+                  outline: 'none',
+                  letterSpacing: '0.5px',
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  color: PK.textMuted,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {filtered.length}/{recordList.length}
+              </span>
+            </div>
+
+            <div
+              ref={listScrollRef}
+              className="flex-1 min-h-0 overflow-y-auto"
+              style={{ backgroundColor: PK.dialogInner }}
+            >
+              {filtered.length === 0 ? (
+                <div
+                  className="flex items-center justify-center p-6 text-center"
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '10px',
+                    color: PK.textMuted,
+                    letterSpacing: '1px',
+                  }}
+                >
+                  {recordList.length === 0
+                    ? `NO ${station.label} RECORDS.`
+                    : 'NO MATCHES.'}
+                </div>
+              ) : (
+                filtered.map((rec, i) => {
+                  const isSel = i === selectedIdx;
+                  const title = safeRead(rec, primaryField) || '(UNTITLED)';
+                  const subtitle = subtitleFields
+                    .map((f) => safeRead(rec, f))
+                    .filter(Boolean)
+                    .join('  ·  ');
+                  return (
+                    <div
+                      key={rec.id}
+                      data-row-idx={i}
+                      onClick={() => {
+                        setSelectedIdx(i);
+                        setOpenRecordId(rec.id);
+                      }}
+                      onMouseEnter={() => setSelectedIdx(i)}
+                      className="cursor-pointer px-3 py-2"
+                      style={{
+                        backgroundColor: isSel ? PK.shelfMid : 'transparent',
+                        borderBottom: `2px solid ${PK.wallDeep}`,
+                        fontFamily: '"Press Start 2P", monospace',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: '10px',
+                          color: PK.text,
+                          lineHeight: 1.5,
+                          letterSpacing: '0.5px',
+                          display: 'flex',
+                          alignItems: 'baseline',
+                          gap: 6,
+                        }}
+                      >
+                        <span
+                          style={{
+                            color: PK.shelfAccent,
+                            width: 10,
+                            display: 'inline-block',
+                          }}
+                        >
+                          {isSel ? '▶' : ' '}
+                        </span>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            flex: 1,
+                          }}
+                        >
+                          {title}
+                        </span>
+                      </div>
+                      {subtitle && (
+                        <div
+                          style={{
+                            fontSize: '7px',
+                            color: PK.textMuted,
+                            marginTop: 4,
+                            marginLeft: 16,
+                            lineHeight: 1.5,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {subtitle}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
+
+        {openRecord && (
+          <>
+            <div
+              className="flex items-center justify-between gap-2 px-3 py-2 flex-shrink-0"
+              style={{
+                backgroundColor: PK.dialogPaper,
+                borderBottom: `4px solid ${PK.dialogBorder}`,
+              }}
+            >
+              <div
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '10px',
+                  color: PK.text,
+                  letterSpacing: '0.5px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 1,
+                }}
+              >
+                <span style={{ color: PK.shelfAccent }}>▶ </span>
+                {safeRead(openRecord, primaryField) || '(UNTITLED)'}
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpenRecordId(null)}
+                className="cursor-pointer px-2 py-1"
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  backgroundColor: PK.dialogInner,
+                  color: PK.text,
+                  border: `3px solid ${PK.ink}`,
+                  boxShadow: `2px 2px 0 ${PK.ink}`,
+                }}
+              >
+                ESC BACK
+              </button>
+            </div>
+
+            <div
+              className="flex-1 min-h-0 overflow-y-auto p-4"
+              style={{ backgroundColor: PK.dialogInner }}
+            >
+              {detailFields.length === 0 && (
+                <div
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '9px',
+                    color: PK.textMuted,
+                    textAlign: 'center',
+                    padding: 12,
+                  }}
+                >
+                  NO DETAIL FIELDS AVAILABLE.
+                </div>
+              )}
+              {detailFields.map((f) => {
+                const value = safeRead(openRecord, f);
+                return (
+                  <div
+                    key={f.id}
+                    style={{
+                      marginBottom: 12,
+                      paddingBottom: 10,
+                      borderBottom: `1px dashed ${PK.wallDeep}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '7px',
+                        color: PK.textMuted,
+                        letterSpacing: '1px',
+                        marginBottom: 4,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {f.name}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '10px',
+                        color: PK.text,
+                        lineHeight: 1.7,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {value || '—'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <div
+          className="py-1 text-center flex-shrink-0"
+          style={{
+            fontFamily: '"Press Start 2P", monospace',
+            fontSize: '7px',
+            color: PK.sky,
+            backgroundColor: PK.ink,
+            letterSpacing: '1px',
+          }}
+        >
+          {openRecord
+            ? 'ESC: BACK TO LIST'
+            : '↑↓ NAVIGATE  ·  ENTER SELECT  ·  ESC CLOSE'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Source Records review terminal. Lists source records, shows each record's
+ * current review status, and lets the user change it (approve / reject / etc.)
+ * by writing back to the table's single-select status field.
+ */
+function SourceRecordsReview({
+  table,
+  records,
+  onClose,
+}: {
+  station: ComputerStation;
+  table: ComputerTable;
+  records: ComputerRecords;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [openRecordId, setOpenRecordId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [tab, setTab] = useState<'workflow' | 'accepted'>('workflow');
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
 
-  const recordList = (records ?? []) as unknown as AnyRecord[];
+  const recordList = records ?? [];
 
-  const primary = useMemo(() => primaryField(table), [table]);
-  const reviewField = useMemo(
-    () => fieldByName(table, 'Review Status') ?? reviewStatusField(table),
+  const safeRead = (record: unknown, field: unknown): string => {
+    if (!record || !field) return '';
+    try {
+      const r = record as { getCellValueAsString: (f: unknown) => string };
+      return r.getCellValueAsString(field) || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const primaryField = useMemo(
+    () =>
+      table?.fields.find((f) => f.isPrimaryField) ?? table?.fields[0] ?? null,
     [table]
   );
-  const choices = useMemo(() => choicesOf(reviewField), [reviewField]);
+
+  // Review-status field: prefer the field literally named "Review Status",
+  // then fall back to any single-select that looks like a review/status field.
+  const reviewField = useMemo(() => {
+    if (!table) return null;
+    const byName = table.getFieldIfExists('Review Status');
+    if (byName) return byName;
+    const selects = table.fields.filter(
+      (f) => String(f.type) === 'singleSelect'
+    );
+    const score = (name: string) => {
+      const s = name.toLowerCase();
+      if (/review\s*status/.test(s)) return 4;
+      if (s.includes('review')) return 3;
+      if (s.includes('status')) return 2;
+      if (s.includes('approv')) return 1;
+      return 0;
+    };
+    let best: (typeof selects)[number] | null = null;
+    let bestScore = -1;
+    for (const f of selects) {
+      const sc = score(f.name);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = f;
+      }
+    }
+    return best;
+  }, [table]);
+
+  const reviewChoices = useMemo(() => {
+    const opts = (
+      reviewField as {
+        options?: {
+          choices?: Array<{ id: string; name: string }>;
+        };
+      } | null
+    )?.options;
+    return opts?.choices ?? [];
+  }, [reviewField]);
+
+  // The "accepted" status used by the Shift+Enter hotkey and the tab filter.
   const acceptChoice = useMemo(
-    () => choices.find((c) => /accept|approv/i.test(c.name)) ?? null,
-    [choices]
+    () => reviewChoices.find((c) => /accept|approv/i.test(c.name)) ?? null,
+    [reviewChoices]
   );
 
-  const summaryFields = useMemo(
-    () =>
-      fieldsOf(table).filter(
-        (f) =>
-          f.id !== primary?.id &&
-          f.id !== reviewField?.id &&
-          String(f.type) !== 'multipleRecordLinks'
-      ),
-    [table, primary, reviewField]
-  );
+  const isAccepted = (rec: unknown) =>
+    !!acceptChoice && safeRead(rec, reviewField) === acceptChoice.name;
 
-  const isAccepted = useCallback(
-    (rec: AnyRecord) => !!acceptChoice && readStr(rec, reviewField) === acceptChoice.name,
-    [acceptChoice, reviewField]
-  );
+  const contextFields = useMemo(() => {
+    if (!table) return [];
+    return table.fields
+      .filter((f) => f.id !== primaryField?.id && f.id !== reviewField?.id)
+      .slice(0, 6);
+  }, [table, primaryField, reviewField]);
 
+  const searchableFields = useMemo(() => {
+    const all: unknown[] = [];
+    if (primaryField) all.push(primaryField);
+    if (reviewField) all.push(reviewField);
+    for (const f of contextFields) all.push(f);
+    return all;
+  }, [primaryField, reviewField, contextFields]);
+
+  // Accepted records leave the main workflow list and live in their own tab.
   const workflowCount = recordList.filter((r) => !isAccepted(r)).length;
   const acceptedCount = recordList.length - workflowCount;
 
-  const visible = useMemo(() => {
-    const base = recordList.filter((r) =>
-      tab === 'accepted' ? isAccepted(r) : !isAccepted(r)
+  const filtered = useMemo(() => {
+    const base = recordList.filter((rec) =>
+      tab === 'accepted' ? isAccepted(rec) : !isAccepted(rec)
     );
     const q = query.trim().toLowerCase();
     if (!q) return base;
     return base.filter((rec) => {
-      if (readStr(rec, primary).toLowerCase().includes(q)) return true;
-      for (const f of summaryFields) {
-        if (readStr(rec, f).toLowerCase().includes(q)) return true;
+      for (const f of searchableFields) {
+        const v = safeRead(rec, f);
+        if (v && v.toLowerCase().includes(q)) return true;
       }
       return false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordList, tab, query, primary, summaryFields, acceptChoice, reviewField]);
+  }, [recordList, searchableFields, query, tab, acceptChoice, reviewField]);
 
-  const open = openId ? recordList.find((r) => r.id === openId) ?? null : null;
+  useEffect(() => {
+    if (filtered.length === 0) setSelectedIdx(0);
+    else if (selectedIdx >= filtered.length) setSelectedIdx(filtered.length - 1);
+  }, [filtered.length, selectedIdx]);
+
+  const openRecord = openRecordId
+    ? recordList.find((r) => r.id === openRecordId) ?? null
+    : null;
 
   const canUpdate = useMemo(() => {
     const t = table as { hasPermissionToUpdateRecords?: () => boolean } | null;
@@ -860,16 +2487,19 @@ function SourceReviewView({
   const setStatus = useCallback(
     async (recordId: string, choiceId: string) => {
       if (!table || !reviewField) return;
-      setError(null);
+      setErrorMsg(null);
       setSaving(true);
       try {
         await (
           table as unknown as {
-            updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
+            updateRecordAsync: (
+              r: string,
+              f: Record<string, unknown>
+            ) => Promise<void>;
           }
         ).updateRecordAsync(recordId, { [reviewField.id]: { id: choiceId } });
       } catch {
-        setError('Could not save — check your edit permissions.');
+        setErrorMsg('COULD NOT SAVE — CHECK PERMISSIONS.');
       } finally {
         setSaving(false);
       }
@@ -877,2391 +2507,1437 @@ function SourceReviewView({
     [table, reviewField]
   );
 
-  // Shift+Enter accepts the open record; Esc closes it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!open) return;
       if (e.key === 'Escape') {
-        setOpenId(null);
-      } else if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
-        if (acceptChoice && canUpdate && !saving) {
-          void setStatus(open.id, acceptChoice.id);
-          setOpenId(null);
+        if (openRecord) setOpenRecordId(null);
+        else onClose();
+        return;
+      }
+      if (openRecord) {
+        // Shift+Enter accepts the open record and returns to the list.
+        if (e.key === 'Enter' && e.shiftKey) {
+          e.preventDefault();
+          if (acceptChoice && canUpdate && !saving) {
+            void setStatus(openRecord.id, acceptChoice.id);
+            setOpenRecordId(null);
+          }
         }
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIdx((i) => Math.min(i + 1, Math.max(filtered.length - 1, 0)));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const rec = filtered[selectedIdx];
+        if (rec) setOpenRecordId(rec.id);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, acceptChoice, canUpdate, saving, setStatus]);
+  }, [
+    openRecord,
+    selectedIdx,
+    filtered,
+    onClose,
+    acceptChoice,
+    canUpdate,
+    saving,
+    setStatus,
+  ]);
 
-  const tabBtn = (key: 'workflow' | 'accepted', label: string, count: number) => {
-    const active = tab === key;
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setTab(key);
-          setOpenId(null);
-        }}
-        style={{
-          cursor: 'pointer',
-          fontSize: 13,
-          fontWeight: 600,
-          padding: '8px 14px',
-          borderRadius: 8,
-          border: `1px solid ${active ? T.accent : T.border}`,
-          backgroundColor: active ? T.accent : T.panel,
-          color: active ? '#fff' : T.textMuted,
-        }}
-      >
-        {label}
-        <span
-          style={{
-            marginLeft: 8,
-            fontSize: 12,
-            opacity: 0.9,
-          }}
-        >
-          {count}
-        </span>
-      </button>
-    );
-  };
+  useEffect(() => {
+    if (openRecord) return;
+    const root = listScrollRef.current;
+    if (!root) return;
+    const node = root.querySelector(
+      `[data-row-idx="${selectedIdx}"]`
+    ) as HTMLElement | null;
+    if (node) node.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx, openRecord]);
+
+  const statusBadge = (text: string) => (
+    <span
+      style={{
+        fontFamily: '"Press Start 2P", monospace',
+        fontSize: '7px',
+        color: PK.ink,
+        backgroundColor: text ? PK.hint : PK.wallDeep,
+        border: `2px solid ${PK.ink}`,
+        padding: '2px 4px',
+        whiteSpace: 'nowrap',
+        lineHeight: 1.2,
+      }}
+    >
+      {text || 'UNREVIEWED'}
+    </span>
+  );
+
+  const openRecordStatus = openRecord ? safeRead(openRecord, reviewField) : '';
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Controls */}
+    <div
+      className="fixed inset-0 z-[100] flex flex-col items-stretch"
+      style={{
+        backgroundColor: PK.wallDeep,
+        padding: 14,
+        boxSizing: 'border-box',
+        fontFamily: '"Press Start 2P", monospace',
+      }}
+    >
       <div
         style={{
+          flex: 1,
+          minHeight: 0,
           display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 16,
-          flexWrap: 'wrap',
+          flexDirection: 'column',
+          border: `8px solid ${PK.skyDeep}`,
+          outline: `5px solid ${PK.shelfMid}`,
+          boxShadow: `0 0 0 4px ${PK.ink}, 0 0 0 14px ${PK.shelfAccent}`,
+          backgroundColor: PK.ink,
         }}
       >
-        <div style={{ display: 'flex', gap: 8 }}>
-          {tabBtn('workflow', 'Workflow', workflowCount)}
-          {tabBtn('accepted', 'Accepted', acceptedCount)}
-        </div>
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search source records…"
-          style={{
-            flex: 1,
-            minWidth: 200,
-            fontSize: 13,
-            padding: '9px 12px',
-            borderRadius: 8,
-            border: `1px solid ${T.borderStrong}`,
-            backgroundColor: T.panel,
-            color: T.text,
-            outline: 'none',
-          }}
-        />
-      </div>
-
-      {!reviewField && (
         <div
+          className="flex items-center justify-between gap-2 px-2 py-2 flex-shrink-0"
           style={{
-            marginBottom: 12,
-            padding: '10px 14px',
-            borderRadius: 8,
-            backgroundColor: T.amberSoft,
-            border: `1px solid ${T.amberBorder}`,
-            color: T.amberText,
-            fontSize: 13,
+            backgroundColor: PK.shelfMid,
+            borderBottom: `4px solid ${PK.skyDeep}`,
           }}
         >
-          No single-select review-status field was found on this table, so status can't be changed.
+          <div
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '10px',
+              lineHeight: 1.6,
+              color: PK.dialogInner,
+              letterSpacing: '1px',
+            }}
+          >
+            <span style={{ color: PK.hint }}>SOURCE RECORDS</span>
+            <span style={{ color: PK.dialogInner }}> — REVIEW</span>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="cursor-pointer px-2 py-1"
+            style={{
+              fontFamily: '"Press Start 2P", monospace',
+              fontSize: '8px',
+              backgroundColor: PK.hint,
+              color: PK.ink,
+              border: `3px solid ${PK.ink}`,
+              boxShadow: `2px 2px 0 ${PK.ink}`,
+            }}
+          >
+            ESC CLOSE
+          </button>
         </div>
-      )}
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 20 }}>
-        {/* List */}
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            backgroundColor: T.panel,
-            border: `1px solid ${T.border}`,
-            borderRadius: 12,
-            overflow: 'hidden',
-          }}
-        >
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            {visible.length === 0 ? (
-              <div style={{ padding: 24, color: T.textMuted, fontSize: 14, textAlign: 'center' }}>
-                {recordList.length === 0
-                  ? 'No source records.'
-                  : query.trim()
-                  ? 'No matches.'
-                  : tab === 'accepted'
-                  ? 'No accepted records yet.'
-                  : 'Nothing left to review.'}
-              </div>
-            ) : (
-              visible.map((rec) => {
-                const active = rec.id === openId;
-                const status = readStr(rec, reviewField);
-                const meta = summaryFields
-                  .slice(0, 3)
-                  .map((f) => readStr(rec, f))
-                  .filter(Boolean)
-                  .join('  ·  ');
+        {!openRecord && (
+          <>
+            <div
+              className="flex items-stretch flex-shrink-0"
+              style={{
+                backgroundColor: PK.dialogPaper,
+                borderBottom: `4px solid ${PK.dialogBorder}`,
+              }}
+            >
+              {(
+                [
+                  ['workflow', `WORKFLOW (${workflowCount})`],
+                  ['accepted', `ACCEPTED (${acceptedCount})`],
+                ] as const
+              ).map(([key, label]) => {
+                const active = tab === key;
                 return (
-                  <div
-                    key={rec.id}
-                    onClick={() => setOpenId(rec.id)}
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setTab(key);
+                      setSelectedIdx(0);
+                      setQuery('');
+                    }}
+                    className="cursor-pointer px-3 py-2"
                     style={{
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 12,
-                      padding: '12px 16px',
-                      borderBottom: `1px solid ${T.border}`,
-                      borderLeft: `3px solid ${active ? T.accent : 'transparent'}`,
-                      backgroundColor: active ? T.selected : T.panel,
+                      flex: 1,
+                      fontFamily: '"Press Start 2P", monospace',
+                      fontSize: '8px',
+                      letterSpacing: '0.5px',
+                      color: PK.ink,
+                      backgroundColor: active ? PK.hint : PK.dialogInner,
+                      border: 'none',
+                      borderRight: `2px solid ${PK.dialogBorder}`,
+                      opacity: active ? 1 : 0.7,
                     }}
                   >
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="flex items-center gap-2 px-3 py-2 flex-shrink-0"
+              style={{
+                backgroundColor: PK.dialogPaper,
+                borderBottom: `4px solid ${PK.dialogBorder}`,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '9px',
+                  color: PK.textMuted,
+                  letterSpacing: '1px',
+                }}
+              >
+                SEARCH
+              </span>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Type to filter..."
+                autoFocus
+                style={{
+                  flex: 1,
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '9px',
+                  backgroundColor: PK.dialogInner,
+                  color: PK.text,
+                  border: `3px solid ${PK.dialogBorder}`,
+                  padding: '6px 8px',
+                  outline: 'none',
+                  letterSpacing: '0.5px',
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  color: PK.textMuted,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {filtered.length}/{tab === 'accepted' ? acceptedCount : workflowCount}
+              </span>
+            </div>
+
+            <div
+              ref={listScrollRef}
+              className="flex-1 min-h-0 overflow-y-auto"
+              style={{ backgroundColor: PK.dialogInner }}
+            >
+              {filtered.length === 0 ? (
+                <div
+                  className="flex items-center justify-center p-6 text-center"
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '10px',
+                    color: PK.textMuted,
+                    letterSpacing: '1px',
+                  }}
+                >
+                  {recordList.length === 0
+                    ? 'NO SOURCE RECORDS.'
+                    : query.trim()
+                    ? 'NO MATCHES.'
+                    : tab === 'accepted'
+                    ? 'NO ACCEPTED RECORDS YET.'
+                    : 'NOTHING LEFT TO REVIEW.'}
+                </div>
+              ) : (
+                filtered.map((rec, i) => {
+                  const isSel = i === selectedIdx;
+                  const title = safeRead(rec, primaryField) || '(UNTITLED)';
+                  const status = safeRead(rec, reviewField);
+                  return (
+                    <div
+                      key={rec.id}
+                      data-row-idx={i}
+                      onClick={() => {
+                        setSelectedIdx(i);
+                        setOpenRecordId(rec.id);
+                      }}
+                      onMouseEnter={() => setSelectedIdx(i)}
+                      className="cursor-pointer px-3 py-2 flex items-center gap-2"
+                      style={{
+                        backgroundColor: isSel ? PK.shelfMid : 'transparent',
+                        borderBottom: `2px solid ${PK.wallDeep}`,
+                        fontFamily: '"Press Start 2P", monospace',
+                      }}
+                    >
+                      <span
                         style={{
-                          fontSize: 14,
-                          fontWeight: 600,
-                          color: T.text,
+                          color: PK.shelfAccent,
+                          width: 10,
+                          display: 'inline-block',
+                          fontSize: '10px',
+                        }}
+                      >
+                        {isSel ? '▶' : ' '}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '10px',
+                          color: PK.text,
+                          lineHeight: 1.5,
+                          letterSpacing: '0.5px',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
+                          flex: 1,
                         }}
                       >
-                        {readStr(rec, primary) || '(Untitled)'}
-                      </div>
-                      {meta && (
-                        <div
-                          style={{
-                            fontSize: 12,
-                            color: T.textMuted,
-                            marginTop: 2,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {meta}
-                        </div>
-                      )}
+                        {title}
+                      </span>
+                      {statusBadge(status)}
                     </div>
-                    <StatusPill label={status} />
-                    {tab === 'workflow' && acceptChoice && canUpdate && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (!saving) void setStatus(rec.id, acceptChoice.id);
-                        }}
-                        style={{
-                          cursor: 'pointer',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: `1px solid ${T.greenBorder}`,
-                          backgroundColor: T.greenSoft,
-                          color: T.greenText,
-                          flexShrink: 0,
-                        }}
-                      >
-                        Accept
-                      </button>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
+                  );
+                })
+              )}
+            </div>
+          </>
+        )}
 
-        {/* Detail */}
-        {open && (
-          <div
-            style={{
-              width: 380,
-              flexShrink: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              backgroundColor: T.panel,
-              border: `1px solid ${T.border}`,
-              borderRadius: 12,
-              overflow: 'hidden',
-            }}
-          >
+        {openRecord && (
+          <>
             <div
+              className="flex items-center justify-between gap-2 px-3 py-2 flex-shrink-0"
               style={{
-                padding: '16px 18px',
-                borderBottom: `1px solid ${T.border}`,
-                display: 'flex',
-                alignItems: 'flex-start',
-                justifyContent: 'space-between',
-                gap: 10,
+                backgroundColor: PK.dialogPaper,
+                borderBottom: `4px solid ${PK.dialogBorder}`,
               }}
             >
-              <div style={{ fontSize: 15, fontWeight: 700, color: T.text, minWidth: 0 }}>
-                {readStr(open, primary) || '(Untitled)'}
+              <div
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '10px',
+                  color: PK.text,
+                  letterSpacing: '0.5px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 1,
+                }}
+              >
+                <span style={{ color: PK.shelfAccent }}>▶ </span>
+                {safeRead(openRecord, primaryField) || '(UNTITLED)'}
               </div>
               <button
                 type="button"
-                onClick={() => setOpenId(null)}
-                style={{ ...iconBtnStyle, width: 28, height: 28, fontSize: 16 }}
+                onClick={() => setOpenRecordId(null)}
+                className="cursor-pointer px-2 py-1"
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  backgroundColor: PK.dialogInner,
+                  color: PK.text,
+                  border: `3px solid ${PK.ink}`,
+                  boxShadow: `2px 2px 0 ${PK.ink}`,
+                }}
               >
-                ×
+                ESC BACK
               </button>
             </div>
 
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 18px' }}>
-              {reviewField && (
-                <div style={{ marginBottom: 18 }}>
-                  <div style={labelStyle}>{reviewField.name}</div>
-                  <div style={{ marginBottom: 10 }}>
-                    <StatusPill label={readStr(open, reviewField)} />
+            <div
+              className="flex-1 min-h-0 overflow-y-auto p-4"
+              style={{ backgroundColor: PK.dialogInner }}
+            >
+              <div
+                style={{
+                  marginBottom: 14,
+                  paddingBottom: 12,
+                  borderBottom: `2px solid ${PK.wallDeep}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '7px',
+                    color: PK.textMuted,
+                    letterSpacing: '1px',
+                    marginBottom: 6,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {reviewField ? reviewField.name : 'REVIEW STATUS'}
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  {statusBadge(openRecordStatus)}
+                </div>
+
+                {!reviewField ? (
+                  <div
+                    style={{
+                      fontFamily: '"Press Start 2P", monospace',
+                      fontSize: '8px',
+                      color: PK.textMuted,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    NO SINGLE-SELECT STATUS FIELD FOUND ON THIS TABLE.
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {choices.map((c) => {
-                      const current = c.name === readStr(open, reviewField);
-                      const th = statusTheme(c.name);
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {reviewChoices.map((choice) => {
+                      const isCurrent = choice.name === openRecordStatus;
                       return (
                         <button
-                          key={c.id}
+                          key={choice.id}
                           type="button"
-                          disabled={saving || !canUpdate || current}
-                          onClick={() => setStatus(open.id, c.id)}
+                          disabled={saving || !canUpdate || isCurrent}
+                          onClick={() => setStatus(openRecord.id, choice.id)}
+                          className="cursor-pointer px-2 py-1"
                           style={{
-                            cursor: saving || !canUpdate || current ? 'default' : 'pointer',
-                            fontSize: 12,
-                            fontWeight: 600,
-                            padding: '7px 12px',
-                            borderRadius: 8,
-                            border: `1px solid ${current ? th.color : T.border}`,
-                            backgroundColor: current ? th.bg : T.panel,
-                            color: current ? th.color : T.text,
+                            fontFamily: '"Press Start 2P", monospace',
+                            fontSize: '8px',
+                            color: PK.ink,
+                            backgroundColor: isCurrent
+                              ? PK.hint
+                              : PK.dialogPaper,
+                            border: `3px solid ${PK.ink}`,
+                            boxShadow: `2px 2px 0 ${PK.ink}`,
                             opacity: saving || !canUpdate ? 0.5 : 1,
+                            cursor:
+                              saving || !canUpdate || isCurrent
+                                ? 'default'
+                                : 'pointer',
                           }}
                         >
-                          {current ? '✓ ' : ''}
-                          {c.name}
+                          {isCurrent ? '✓ ' : ''}
+                          {choice.name}
                         </button>
                       );
                     })}
                   </div>
-                  {!canUpdate && (
-                    <div style={{ marginTop: 8, fontSize: 12, color: T.redText }}>
-                      You don't have permission to edit this table.
-                    </div>
-                  )}
-                  {error && (
-                    <div style={{ marginTop: 8, fontSize: 12, color: T.redText }}>{error}</div>
-                  )}
-                  {acceptChoice && canUpdate && (
-                    <div style={{ marginTop: 8, fontSize: 11, color: T.textSubtle }}>
-                      Tip: press Shift+Enter to accept.
-                    </div>
-                  )}
-                </div>
-              )}
+                )}
 
-              {summaryFields.map((f) => {
-                const v = readStr(open, f);
-                if (!v) return null;
+                {!canUpdate && (
+                  <div
+                    style={{
+                      fontFamily: '"Press Start 2P", monospace',
+                      fontSize: '7px',
+                      color: PK.shelfAccent,
+                      marginTop: 8,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    NO PERMISSION TO EDIT THIS TABLE.
+                  </div>
+                )}
+                {errorMsg && (
+                  <div
+                    style={{
+                      fontFamily: '"Press Start 2P", monospace',
+                      fontSize: '7px',
+                      color: PK.shelfAccent,
+                      marginTop: 8,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {errorMsg}
+                  </div>
+                )}
+              </div>
+
+              {contextFields.map((f) => {
+                const value = safeRead(openRecord, f);
                 return (
-                  <div key={f.id} style={{ marginBottom: 16 }}>
-                    <div style={labelStyle}>{f.name}</div>
+                  <div
+                    key={f.id}
+                    style={{
+                      marginBottom: 12,
+                      paddingBottom: 10,
+                      borderBottom: `1px dashed ${PK.wallDeep}`,
+                    }}
+                  >
                     <div
                       style={{
-                        fontSize: 13,
-                        lineHeight: 1.6,
-                        color: T.text,
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '7px',
+                        color: PK.textMuted,
+                        letterSpacing: '1px',
+                        marginBottom: 4,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {f.name}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: '"Press Start 2P", monospace',
+                        fontSize: '10px',
+                        color: PK.text,
+                        lineHeight: 1.7,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
                       }}
                     >
-                      {v}
+                      {value || '—'}
                     </div>
                   </div>
                 );
               })}
             </div>
-          </div>
+          </>
         )}
-      </div>
-    </div>
-  );
-}
 
-const labelStyle: React.CSSProperties = {
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: 0.6,
-  textTransform: 'uppercase',
-  color: T.textSubtle,
-  marginBottom: 6,
-};
-
-// ---------------------------------------------------------------------------
-// Deals Kanban + deal modal
-// ---------------------------------------------------------------------------
-
-const SUMMARY_FIELD_NAMES = [
-  'Account Name',
-  'Gross ACV',
-  'Net New ACV',
-  'Close Date',
-  'Quarter',
-  'Probability',
-  'Importance',
-  'Account Tier',
-  'SC Risk Score',
-  'AE Risk Score',
-  'Meeting Types Held',
-  'Pod Members',
-];
-
-/**
- * CEP meeting types tracked in the "Meeting Types Held" field, in sequence.
- * Each matcher is lenient so it lights up regardless of exact option wording.
- */
-const MEETING_TYPES: { abbr: string; label: string; re: RegExp }[] = [
-  { abbr: 'DISC', label: 'Discovery', re: /discovery/i },
-  { abbr: 'NBM', label: 'New Business Meeting', re: /\bnbm\b|new business/i },
-  { abbr: 'SSW', label: 'Solution Scoping Workshop', re: /\bssw\b|scoping/i },
-  { abbr: 'EB', label: 'EB Go/No-Go', re: /go\s*\/?\s*no[-\s]?go|\beb\b/i },
-  {
-    abbr: 'SVE',
-    label: 'Solution Validation Event',
-    re: /\bsve\b|validation event|solution validation/i,
-  },
-  { abbr: 'EKO', label: 'Enterprise Kickoff', re: /\beko\b|kickoff/i },
-];
-
-function EventEditRow({
-  calendar,
-  ev,
-  canUpdate,
-}: {
-  calendar: CalendarBundle;
-  ev: AnyRecord;
-  canUpdate: boolean;
-}) {
-  const [saving, setSaving] = useState(false);
-  const title = calendar.title ? readStr(ev, calendar.title) : '(Untitled event)';
-  const s = eventDate(ev, calendar.start);
-  const dateLabel = s
-    ? s.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-    : '';
-  const timeLabel = eventTimeLabel(
-    ev,
-    calendar.start,
-    calendar.end,
-    calendar.allDay
-  );
-  const actType = calendar.activityType ? readStr(ev, calendar.activityType) : '';
-  const actChoices = choicesOf(calendar.activityType);
-  const logged = !!readRaw(ev, calendar.logActivity);
-
-  const write = async (fieldId: string, value: unknown) => {
-    if (!calendar.table) return;
-    setSaving(true);
-    try {
-      await (
-        calendar.table as unknown as {
-          updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
-        }
-      ).updateRecordAsync(ev.id, { [fieldId]: value });
-    } catch {
-      /* ignore */
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div style={{ padding: '12px 0', borderBottom: `1px solid ${T.border}` }}>
-      <div
-        style={{
-          fontSize: 13,
-          fontWeight: 700,
-          color: T.text,
-          lineHeight: 1.4,
-          wordBreak: 'break-word',
-        }}
-      >
-        {title}
-      </div>
-      <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
-        {[dateLabel, timeLabel].filter(Boolean).join(' · ')}
-      </div>
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {calendar.activityType && (
-          <div>
-            <div style={labelStyle}>Activity Type</div>
-            <select
-              value={actType}
-              disabled={saving || !canUpdate}
-              onChange={(e) => {
-                const c = actChoices.find((x) => x.name === e.target.value);
-                if (calendar.activityType)
-                  write(calendar.activityType.id, c ? { id: c.id } : null);
-              }}
-              style={{
-                width: '100%',
-                fontFamily: FONT,
-                fontSize: 12,
-                padding: '6px 8px',
-                borderRadius: 8,
-                border: `2px solid ${T.border}`,
-                backgroundColor: T.panel,
-                color: T.text,
-                outline: 'none',
-              }}
-            >
-              <option value="">—</option>
-              {actChoices.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        {calendar.logActivity && (
-          <button
-            type="button"
-            disabled={saving || !canUpdate}
-            onClick={() =>
-              calendar.logActivity && write(calendar.logActivity.id, !logged)
-            }
-            style={{
-              alignSelf: 'flex-start',
-              cursor: saving || !canUpdate ? 'default' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: 12,
-              fontWeight: 700,
-              padding: '6px 10px',
-              borderRadius: 8,
-              border: `2px solid ${T.border}`,
-              backgroundColor: logged ? T.greenSoft : T.panel,
-              color: logged ? T.greenText : T.textMuted,
-              opacity: saving || !canUpdate ? 0.5 : 1,
-            }}
-          >
-            <span
-              style={{
-                width: 14,
-                height: 14,
-                borderRadius: 4,
-                border: `2px solid ${logged ? T.greenText : T.borderStrong}`,
-                backgroundColor: logged ? T.greenText : 'transparent',
-                color: '#fff',
-                fontSize: 10,
-                lineHeight: '11px',
-                textAlign: 'center',
-                display: 'inline-block',
-              }}
-            >
-              {logged ? '✓' : ''}
-            </span>
-            Log Activity
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DealEventsPanel({
-  calendar,
-  events,
-  canUpdate,
-}: {
-  calendar: CalendarBundle;
-  events: AnyRecord[];
-  canUpdate: boolean;
-}) {
-  return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        width: 340,
-        maxWidth: '92vw',
-        maxHeight: '86vh',
-        display: 'flex',
-        flexDirection: 'column',
-        backgroundColor: T.panel,
-        border: `3px solid ${T.border}`,
-        borderRadius: 14,
-        overflow: 'hidden',
-        boxShadow: `6px 6px 0 ${T.border}`,
-      }}
-    >
-      <div
-        style={{
-          backgroundColor: T.headerBar,
-          borderBottom: `2px solid ${T.border}`,
-          padding: '14px 16px',
-        }}
-      >
-        <div style={{ fontSize: 15, fontWeight: 800, color: T.text }}>
-          Linked Events
-        </div>
-        <div style={{ fontSize: 11, color: T.textMuted, marginTop: 2 }}>
-          {events.length} calendar event{events.length === 1 ? '' : 's'}
-        </div>
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 16px' }}>
-        {events.length === 0 ? (
-          <div style={{ padding: '20px 0', fontSize: 13, color: T.textMuted }}>
-            No calendar events linked to this deal.
-          </div>
-        ) : (
-          events.map((ev) => (
-            <EventEditRow
-              key={ev.id}
-              calendar={calendar}
-              ev={ev}
-              canUpdate={canUpdate}
-            />
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DealModal({
-  table,
-  deal,
-  primary,
-  stageField,
-  summaryFields,
-  brief,
-  briefCount,
-  notesField,
-  deadField,
-  techWinField,
-  dealRiskField,
-  calendar,
-  events,
-  canUpdate,
-  onClose,
-}: {
-  table: AnyTable;
-  deal: AnyRecord;
-  primary: AnyField | null;
-  stageField: AnyField | null;
-  summaryFields: AnyField[];
-  brief: BriefView | null;
-  briefCount: number;
-  notesField: AnyField | null;
-  deadField: AnyField | null;
-  techWinField: AnyField | null;
-  dealRiskField: AnyField | null;
-  calendar: CalendarBundle;
-  events: AnyRecord[];
-  canUpdate: boolean;
-  onClose: () => void;
-}) {
-  const initial = notesField ? readStr(deal, notesField) : '';
-  const [notes, setNotes] = useState(initial);
-  const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [deadSaving, setDeadSaving] = useState(false);
-  const [assessSaving, setAssessSaving] = useState(false);
-  const dirty = notes !== initial;
-  const dead = !!readRaw(deal, deadField);
-  const techWinValue = techWinField ? readStr(deal, techWinField) : '';
-  const techWinChoices = choicesOf(techWinField);
-  const riskValue = dealRiskField ? readStr(deal, dealRiskField) : '';
-  const riskChoices = choicesOf(dealRiskField);
-
-  const writeCell = async (fieldId: string, value: unknown) => {
-    if (!table) return;
-    setAssessSaving(true);
-    try {
-      await (
-        table as unknown as {
-          updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
-        }
-      ).updateRecordAsync(deal.id, { [fieldId]: value });
-    } catch {
-      /* surfaced via lack of state change */
-    } finally {
-      setAssessSaving(false);
-    }
-  };
-
-  const riskTheme = (name: string) => {
-    const s = name.toLowerCase();
-    if (/high/.test(s)) return { bg: T.redSoft, color: T.redText };
-    if (/med/.test(s)) return { bg: T.amberSoft, color: T.amberText };
-    if (/low/.test(s)) return { bg: T.greenSoft, color: T.greenText };
-    return { bg: T.accentSoft, color: T.accentText };
-  };
-
-  const winTheme = (name: string) => {
-    const s = name.toLowerCase().trim();
-    if (s === 'yes') return { bg: T.greenSoft, color: T.greenText };
-    if (s === 'no') return { bg: T.redSoft, color: T.redText };
-    return { bg: '#f1f3f6', color: T.textMuted };
-  };
-
-  const toggleDead = async () => {
-    if (!deadField || !table) return;
-    setDeadSaving(true);
-    try {
-      await (
-        table as unknown as {
-          updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
-        }
-      ).updateRecordAsync(deal.id, { [deadField.id]: !dead });
-    } catch {
-      /* ignore — surfaced via lack of state change */
-    } finally {
-      setDeadSaving(false);
-    }
-  };
-
-  // Reset the editor when a different deal is opened in the same modal instance.
-  useEffect(() => {
-    setNotes(notesField ? readStr(deal, notesField) : '');
-    setStatus(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal.id]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  const save = async () => {
-    if (!notesField || !table) return;
-    setSaving(true);
-    setStatus(null);
-    try {
-      await (
-        table as unknown as {
-          updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
-        }
-      ).updateRecordAsync(deal.id, { [notesField.id]: notes });
-      setStatus('Saved');
-    } catch {
-      setStatus('Could not save — check permissions.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const stageName = stageField ? readStr(deal, stageField) : '';
-
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
-        backgroundColor: 'rgba(16,24,32,0.55)',
-        display: 'flex',
-        alignItems: 'flex-start',
-        justifyContent: 'center',
-        padding: 24,
-        gap: 16,
-        overflow: 'auto',
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: 720,
-          maxHeight: '86vh',
-          display: 'flex',
-          flexDirection: 'column',
-          backgroundColor: T.panel,
-          border: `3px solid ${T.border}`,
-          borderRadius: 14,
-          overflow: 'hidden',
-          boxShadow: `6px 6px 0 ${T.border}`,
-        }}
-      >
-        {/* Header */}
         <div
+          className="py-1 text-center flex-shrink-0"
           style={{
-            backgroundColor: T.headerBar,
-            borderBottom: `2px solid ${T.border}`,
-            padding: '14px 18px',
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: 12,
+            fontFamily: '"Press Start 2P", monospace',
+            fontSize: '7px',
+            color: PK.sky,
+            backgroundColor: PK.ink,
+            letterSpacing: '1px',
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: 17,
-                fontWeight: 800,
-                color: dead ? T.textMuted : T.text,
-                textDecoration: dead ? 'line-through' : 'none',
-              }}
-            >
-              {readStr(deal, primary) || '(Untitled deal)'}
-            </div>
-            <div
-              style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}
-            >
-              {stageName && <StatusPill label={stageName} />}
-              {dead && (
-                <span
-                  style={{
-                    fontSize: 10,
-                    fontWeight: 800,
-                    letterSpacing: 0.5,
-                    padding: '2px 8px',
-                    borderRadius: 999,
-                    backgroundColor: '#e5e9ee',
-                    color: T.textMuted,
-                    border: '1px solid #c3ccd6',
-                  }}
-                >
-                  DEAD — excluded from pipeline
-                </span>
-              )}
-            </div>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {deadField && (
-              <button
-                type="button"
-                onClick={toggleDead}
-                disabled={deadSaving || !canUpdate}
-                title={
-                  dead
-                    ? 'Restore this deal to the active pipeline'
-                    : 'Flag as probably dead (drops it from pipeline totals)'
-                }
-                style={{
-                  cursor: deadSaving || !canUpdate ? 'default' : 'pointer',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  padding: '7px 12px',
-                  borderRadius: 8,
-                  border: `2px solid ${T.border}`,
-                  backgroundColor: dead ? T.panel : T.redSoft,
-                  color: dead ? T.text : T.redText,
-                  opacity: deadSaving || !canUpdate ? 0.5 : 1,
-                }}
-              >
-                {deadSaving
-                  ? 'Saving…'
-                  : dead
-                  ? 'Restore deal'
-                  : 'Mark as dead'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                cursor: 'pointer',
-                width: 30,
-                height: 30,
-                borderRadius: 8,
-                border: `2px solid ${T.border}`,
-                backgroundColor: T.hint,
-                color: T.text,
-                fontSize: 16,
-                fontWeight: 700,
-                flexShrink: 0,
-              }}
-            >
-              ×
-            </button>
-          </div>
-        </div>
-
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 18 }}>
-          {/* Summary */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-              gap: 12,
-              marginBottom: 18,
-            }}
-          >
-            {summaryFields.map((f) => {
-              const v = readStr(deal, f);
-              if (!v) return null;
-              return (
-                <div key={f.id}>
-                  <div style={labelStyle}>{f.name}</div>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      color: T.text,
-                      lineHeight: 1.5,
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {v}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Brief summary */}
-          <div
-            style={{
-              borderTop: `2px solid ${T.border}`,
-              paddingTop: 14,
-              marginBottom: 18,
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                justifyContent: 'space-between',
-                marginBottom: 8,
-              }}
-            >
-              <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>
-                Brief Summary
-              </div>
-              {briefCount > 1 && (
-                <div style={{ fontSize: 11, color: T.textMuted }}>
-                  latest of {briefCount}
-                </div>
-              )}
-            </div>
-            {!brief ? (
-              <div style={{ fontSize: 13, color: T.textMuted }}>
-                No brief snapshot for this deal yet.
-              </div>
-            ) : (
-              <>
-                {brief.subtitle && (
-                  <div style={{ fontSize: 11, color: T.textMuted, marginBottom: 10 }}>
-                    {brief.subtitle}
-                  </div>
-                )}
-                {brief.sections.length === 0 ? (
-                  <div style={{ fontSize: 13, color: T.textMuted }}>
-                    This snapshot has no written content.
-                  </div>
-                ) : (
-                  brief.sections.map((s) => (
-                    <div key={s.label} style={{ marginBottom: 12 }}>
-                      <div style={labelStyle}>{s.label}</div>
-                      <div style={{ wordBreak: 'break-word' }}>
-                        <RichText text={s.value} size={13} />
-                      </div>
-                    </div>
-                  ))
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Live notes */}
-          <div style={{ borderTop: `2px solid ${T.border}`, paddingTop: 14 }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                justifyContent: 'space-between',
-                marginBottom: 8,
-              }}
-            >
-              <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>
-                Live Notes
-                {notesField ? (
-                  <span
-                    style={{ fontSize: 11, fontWeight: 500, color: T.textMuted }}
-                  >
-                    {'  '}· {notesField.name}
-                  </span>
-                ) : null}
-              </div>
-              <div style={{ fontSize: 11, color: T.textMuted }}>
-                {saving
-                  ? 'Saving…'
-                  : status
-                  ? status
-                  : dirty
-                  ? 'Unsaved changes'
-                  : ''}
-              </div>
-            </div>
-            {!notesField ? (
-              <div style={{ fontSize: 13, color: T.textMuted }}>
-                No notes field found on the Deals table.
-              </div>
-            ) : (
-              <>
-                <textarea
-                  value={notes}
-                  onChange={(e) => {
-                    setNotes(e.target.value);
-                    setStatus(null);
-                  }}
-                  disabled={!canUpdate}
-                  placeholder="Type notes during your discussion with the AE…"
-                  rows={6}
-                  style={{
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    fontFamily: FONT,
-                    fontSize: 13,
-                    lineHeight: 1.6,
-                    color: T.text,
-                    backgroundColor: canUpdate ? '#fff' : '#f3f4f6',
-                    border: `2px solid ${T.border}`,
-                    borderRadius: 8,
-                    padding: 10,
-                    outline: 'none',
-                    resize: 'vertical',
-                  }}
-                />
-                <div
-                  style={{
-                    marginTop: 10,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={save}
-                    disabled={saving || !canUpdate || !dirty}
-                    style={{
-                      cursor: saving || !canUpdate || !dirty ? 'default' : 'pointer',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      padding: '8px 16px',
-                      borderRadius: 8,
-                      border: `2px solid ${T.border}`,
-                      backgroundColor: T.hint,
-                      color: T.text,
-                      boxShadow: `2px 2px 0 ${T.border}`,
-                      opacity: saving || !canUpdate || !dirty ? 0.5 : 1,
-                    }}
-                  >
-                    Save Notes
-                  </button>
-                  {dirty && !saving && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setNotes(initial);
-                        setStatus(null);
-                      }}
-                      style={{
-                        cursor: 'pointer',
-                        fontSize: 13,
-                        fontWeight: 600,
-                        padding: '8px 14px',
-                        borderRadius: 8,
-                        border: `2px solid ${T.border}`,
-                        backgroundColor: T.panel,
-                        color: T.text,
-                      }}
-                    >
-                      Revert
-                    </button>
-                  )}
-                  {!canUpdate && (
-                    <span style={{ fontSize: 12, color: T.redText }}>
-                      Read-only (no edit permission).
-                    </span>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Deal assessment */}
-          {(techWinField || dealRiskField) && (
-            <div style={{ borderTop: `2px solid ${T.border}`, paddingTop: 14, marginTop: 18 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  justifyContent: 'space-between',
-                  marginBottom: 10,
-                }}
-              >
-                <div style={{ fontSize: 14, fontWeight: 800, color: T.text }}>
-                  Deal Assessment
-                </div>
-                <div style={{ fontSize: 11, color: T.textMuted }}>
-                  {assessSaving ? 'Saving…' : ''}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  gap: 20,
-                }}
-              >
-                {techWinField && (
-                  <div>
-                    <div style={labelStyle}>{techWinField.name}</div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {techWinChoices.map((c) => {
-                        const active = c.name === techWinValue;
-                        const wt = winTheme(c.name);
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            disabled={assessSaving || !canUpdate || active}
-                            onClick={() => writeCell(techWinField.id, { id: c.id })}
-                            style={{
-                              cursor:
-                                assessSaving || !canUpdate || active
-                                  ? 'default'
-                                  : 'pointer',
-                              fontSize: 13,
-                              fontWeight: 700,
-                              padding: '7px 12px',
-                              borderRadius: 8,
-                              border: `2px solid ${active ? wt.color : T.border}`,
-                              backgroundColor: active ? wt.bg : T.panel,
-                              color: active ? wt.color : T.textMuted,
-                              opacity: assessSaving || !canUpdate ? 0.5 : 1,
-                            }}
-                          >
-                            {active ? '● ' : ''}
-                            {c.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {dealRiskField && (
-                  <div>
-                    <div style={labelStyle}>{dealRiskField.name}</div>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {riskChoices.map((c) => {
-                        const active = c.name === riskValue;
-                        const rt = riskTheme(c.name);
-                        return (
-                          <button
-                            key={c.id}
-                            type="button"
-                            disabled={assessSaving || !canUpdate || active}
-                            onClick={() => writeCell(dealRiskField.id, { id: c.id })}
-                            style={{
-                              cursor:
-                                assessSaving || !canUpdate || active
-                                  ? 'default'
-                                  : 'pointer',
-                              fontSize: 13,
-                              fontWeight: 700,
-                              padding: '7px 12px',
-                              borderRadius: 8,
-                              border: `2px solid ${active ? rt.color : T.border}`,
-                              backgroundColor: active ? rt.bg : T.panel,
-                              color: active ? rt.color : T.textMuted,
-                              opacity: assessSaving || !canUpdate ? 0.5 : 1,
-                            }}
-                          >
-                            {active ? '● ' : ''}
-                            {c.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {!canUpdate && (
-                <div style={{ marginTop: 8, fontSize: 12, color: T.redText }}>
-                  Read-only (no edit permission).
-                </div>
-              )}
-            </div>
-          )}
+          {openRecord
+            ? saving
+              ? 'SAVING…'
+              : 'SHIFT+ENTER ACCEPT · PICK A STATUS · ESC BACK'
+            : '↑↓ NAVIGATE  ·  ENTER SELECT  ·  ESC CLOSE'}
         </div>
       </div>
-      {calendar.table && (
-        <DealEventsPanel
-          calendar={calendar}
-          events={events}
-          canUpdate={canEdit(calendar.table)}
-        />
-      )}
     </div>
   );
 }
 
-function KanbanView({
-  table,
-  records,
-  members,
-  briefsByDeal,
-  calendar,
-  eventsByDeal,
-}: {
-  table: AnyTable;
-  records: AnyRecords;
-  members: Member[];
-  briefsByDeal: Record<string, BriefView[]>;
-  calendar: CalendarBundle;
-  eventsByDeal: Record<string, AnyRecord[]>;
-}) {
-  const [aeId, setAeId] = useState<string>('all');
-  const [quarterFilter, setQuarterFilter] = useState<string>('all');
-  const [openDealId, setOpenDealId] = useState<string | null>(null);
+function PokeMartInterface() {
+  const base = useBase();
+  // Characters come from the Deal Team table.
+  const table = useMemo(
+    () => base.getTableByIdIfExists('tbli97fs0V1Qex7zd') ?? base.tables[0],
+    [base]
+  );
+  const records = useRecords(table ?? null);
 
-  const primary = useMemo(() => primaryField(table), [table]);
-  const stageField = useMemo(() => fieldByName(table, 'Stage'), [table]);
-  const accountField = useMemo(() => fieldByName(table, 'Account Name'), [table]);
-  const grossAcvField = useMemo(
-    () => fieldByName(table, 'Gross ACV') ?? fieldByName(table, 'ACV'),
-    [table]
+  // 1-on-1 brief snapshots live in their own table, each linked to a team
+  // member via the "For Team Member" field. A member can now have several.
+  const briefSnapshotsTable = useMemo(
+    () => base.getTableByIdIfExists('tblLUnyyar0p4hruj'),
+    [base]
   );
-  const netAcvField = useMemo(() => fieldByName(table, 'Net New ACV'), [table]);
-  const quarterField = useMemo(() => fieldByName(table, 'Quarter'), [table]);
-  const deadField = useMemo(() => fieldByName(table, 'Dead'), [table]);
-  const techWinField = useMemo(() => fieldByName(table, 'Tech win?'), [table]);
-  const dealRiskField = useMemo(() => fieldByName(table, 'Deal risk'), [table]);
-  const podMembersField = useMemo(() => fieldByName(table, 'Pod Members'), [table]);
-  const isDead = (rec: AnyRecord) => !!readRaw(rec, deadField);
-  const meetingsField = useMemo(
-    () => fieldByName(table, 'Meeting Types Held'),
-    [table]
+  const briefSnapshotsRecords = useRecords(briefSnapshotsTable ?? null);
+
+  // Source Records terminal data (review / approval).
+  const sourceRecordsTable = useMemo(
+    () => base.getTableByIdIfExists('tblSV1PcX8QizC5da'),
+    [base]
   );
-  const notesField = useMemo(
+  const sourceRecordsRecords = useRecords(sourceRecordsTable ?? null);
+
+  const nameField = useMemo(
     () =>
-      fieldByName(table, 'SC Notes') ??
-      fieldByName(table, 'Notes') ??
-      fieldsOf(table).find(
-        (f) => String(f.type) === 'multilineText' && !f.isPrimaryField
-      ) ??
+      table?.fields.find((f) => f.isPrimaryField) ??
+      table?.getFieldIfExists('Name') ??
       null,
     [table]
   );
-  const summaryFields = useMemo(
-    () =>
-      SUMMARY_FIELD_NAMES.map((n) => fieldByName(table, n)).filter(
-        (f): f is AnyField => !!f
-      ),
+
+  // The System Owner (checkbox) is the player — exclude them from the sprites.
+  const systemOwnerField = useMemo(
+    () => table?.getFieldIfExists('System Owner') ?? null,
     [table]
   );
 
-  const canUpdate = useMemo(() => {
-    const t = table as { hasPermissionToUpdateRecords?: () => boolean } | null;
-    if (!t || typeof t.hasPermissionToUpdateRecords !== 'function') return true;
-    try {
-      return t.hasPermissionToUpdateRecords();
-    } catch {
-      return false;
-    }
-  }, [table]);
-
-  const recordList = (records ?? []) as unknown as AnyRecord[];
-  // Stage columns, minus the retired generic "Closed" (now Won/Lost).
-  const stages = choicesOf(stageField).filter(
-    (s) => s.name.trim().toLowerCase() !== 'closed'
-  );
-  // Index of the scoping (SSW) stage; deals beyond it are "past scope".
-  const sswStageIndex = stages.findIndex((s) => /ssw|scoping/i.test(s.name));
-
-  const quarters = useMemo(() => {
-    const set = new Set<string>();
-    for (const rec of recordList) {
-      const q = quarterField ? readStr(rec, quarterField) : '';
-      if (q) set.add(q);
-    }
-    return Array.from(set).sort();
-  }, [recordList, quarterField]);
-
-  const filtered = useMemo(
-    () =>
-      recordList.filter((rec) => {
-        if (aeId !== 'all' && !linkedIds(rec, podMembersField).includes(aeId))
-          return false;
-        if (
-          quarterFilter !== 'all' &&
-          (quarterField ? readStr(rec, quarterField) : '') !== quarterFilter
-        )
-          return false;
+  const npcs = useMemo((): GameNpc[] => {
+    if (!records || !nameField) return [];
+    const members = records.filter((record) => {
+      if (!systemOwnerField) return true;
+      try {
+        return !record.getCellValue(systemOwnerField);
+      } catch {
         return true;
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [recordList, aeId, quarterFilter, podMembersField, quarterField]
+      }
+    });
+    const stations = deskStationsForNpcCount(members.length);
+    return members.map((record, index) => {
+      const desk = stations[index]?.clerk;
+      const standee = STANDEE_SPOTS[index - ROOM_DESK_CLERKS.length];
+      const x = desk?.x ?? standee?.[0] ?? Math.floor(COLS / 2);
+      const y = desk?.y ?? standee?.[1] ?? 4;
+      return {
+        recordId: record.id,
+        name: record.getCellValueAsString(nameField) || `AE ${index + 1}`,
+        x,
+        y,
+      };
+    });
+  }, [records, nameField, systemOwnerField]);
+
+  const deskStations = useMemo(
+    () => deskStationsForNpcCount(npcs.length),
+    [npcs.length]
   );
 
-  const columns = useMemo(() => {
-    const byStage: { name: string; deals: AnyRecord[] }[] = stages.map((c) => ({
-      name: c.name,
-      deals: [],
-    }));
-    const noStage: AnyRecord[] = [];
-    for (const rec of filtered) {
-      const sName = stageField ? readStr(rec, stageField) : '';
-      const col = byStage.find((c) => c.name === sName);
-      if (col) col.deals.push(rec);
-      // Deals in the retired "Closed" stage (or unknown) fall through silently.
-      else if (sName && !/^closed$/i.test(sName)) noStage.push(rec);
-    }
-    if (noStage.length) byStage.push({ name: 'No Stage', deals: noStage });
-    // Keep each column in order but float "dead" deals to the bottom.
-    for (const c of byStage) {
-      c.deals.sort((a, b) => (isDead(a) ? 1 : 0) - (isDead(b) ? 1 : 0));
-    }
-    return byStage;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stages, filtered, stageField, deadField]);
+  const blockedCells = useMemo(() => buildBlockedCells(npcs), [npcs]);
+  const [player, setPlayer] = useState(() => ({
+    x: Math.floor(COLS / 2),
+    y: ROWS - 2,
+  }));
+  const [direction, setDirection] = useState<Direction>('up');
+  const [walkFrame, setWalkFrame] = useState<0 | 1>(0);
+  const [playerMotion, setPlayerMotion] = useState<PlayerMotion | null>(null);
+  const [moveAnimTick, setMoveAnimTick] = useState(0);
 
-  // Open pipeline = filtered deals not in a closed stage and not flagged dead.
-  const openPipeline = useMemo(() => {
-    let sum = 0;
-    for (const rec of filtered) {
-      const sName = stageField ? readStr(rec, stageField) : '';
-      if (!/closed/i.test(sName) && !isDead(rec)) sum += numVal(rec, grossAcvField);
-    }
-    return sum;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, stageField, grossAcvField, deadField]);
+  const [dialogNpc, setDialogNpc] = useState<GameNpc | null>(null);
+  const [line1Shown, setLine1Shown] = useState('');
+  const [line2Shown, setLine2Shown] = useState('');
+  const [dialogPhase, setDialogPhase] = useState<
+    'line1' | 'line2' | 'menu' | null
+  >(null);
+  const [menuYes, setMenuYes] = useState(true);
+  const [showBrief, setShowBrief] = useState(false);
+  const [briefRecordId, setBriefRecordId] = useState<string | null>(null);
+  const [briefAeName, setBriefAeName] = useState('');
 
-  const openDeal = openDealId
-    ? recordList.find((r) => r.id === openDealId) ?? null
-    : null;
-  const openBriefs = openDeal ? briefsByDeal[openDeal.id] ?? [] : [];
-
-  const fmtCount = filtered.length;
-
-  return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Filter bar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 16,
-          flexWrap: 'wrap',
-        }}
-      >
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>
-          Filter by AE
-        </span>
-        <select
-          value={aeId}
-          onChange={(e) => setAeId(e.target.value)}
-          style={{
-            fontFamily: FONT,
-            fontSize: 13,
-            padding: '8px 10px',
-            borderRadius: 8,
-            border: `2px solid ${T.border}`,
-            backgroundColor: T.panel,
-            color: T.text,
-            outline: 'none',
-          }}
-        >
-          <option value="all">All AEs</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-        <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>
-          Quarter
-        </span>
-        <select
-          value={quarterFilter}
-          onChange={(e) => setQuarterFilter(e.target.value)}
-          style={{
-            fontFamily: FONT,
-            fontSize: 13,
-            padding: '8px 10px',
-            borderRadius: 8,
-            border: `2px solid ${T.border}`,
-            backgroundColor: T.panel,
-            color: T.text,
-            outline: 'none',
-          }}
-        >
-          <option value="all">All quarters</option>
-          {quarters.map((q) => (
-            <option key={q} value={q}>
-              {q}
-            </option>
-          ))}
-        </select>
-        <span style={{ fontSize: 12, color: T.textMuted }}>
-          {fmtCount} deal{fmtCount === 1 ? '' : 's'}
-        </span>
-        <span
-          style={{
-            marginLeft: 'auto',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 13,
-            fontWeight: 800,
-            color: T.text,
-            backgroundColor: T.hint,
-            border: `2px solid ${T.border}`,
-            borderRadius: 8,
-            padding: '6px 12px',
-            boxShadow: `2px 2px 0 ${T.border}`,
-          }}
-        >
-          <span style={{ fontWeight: 600, color: T.textMuted }}>
-            Open pipeline (Gross ACV)
-          </span>
-          {formatMoney(openPipeline)}
-        </span>
-      </div>
-
-      {/* Board */}
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          gap: 14,
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          paddingBottom: 8,
-        }}
-      >
-        {columns.map((col) => {
-          const th = statusTheme(col.name);
-          const colTotal = col.deals.reduce(
-            (sum, d) => sum + (isDead(d) ? 0 : numVal(d, grossAcvField)),
-            0
-          );
-          return (
-            <div
-              key={col.name}
-              style={{
-                width: 270,
-                flexShrink: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                backgroundColor: '#eef4fb',
-                border: `2px solid ${T.border}`,
-                borderRadius: 12,
-                overflow: 'hidden',
-              }}
-            >
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderBottom: `2px solid ${T.border}`,
-                  backgroundColor: th.bg,
-                  color: th.color,
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 800,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span
-                    style={{
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {col.name}
-                  </span>
-                  <span style={{ fontSize: 12, flexShrink: 0, marginLeft: 8 }}>
-                    {col.deals.length}
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, fontWeight: 700, marginTop: 3, opacity: 0.9 }}>
-                  {formatMoney(colTotal)}
-                </div>
-              </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 10 }}>
-                {col.deals.length === 0 ? (
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: T.textSubtle,
-                      textAlign: 'center',
-                      padding: '16px 0',
-                    }}
-                  >
-                    —
-                  </div>
-                ) : (
-                  col.deals.map((deal) => {
-                    const account = accountField ? readStr(deal, accountField) : '';
-                    const grossAcv = grossAcvField ? readStr(deal, grossAcvField) : '';
-                    const netAcv = netAcvField ? readStr(deal, netAcvField) : '';
-                    const quarter = quarterField ? readStr(deal, quarterField) : '';
-                    const dead = isDead(deal);
-                    const briefN = (briefsByDeal[deal.id] ?? []).length;
-                    const heldStr = meetingsField
-                      ? readStr(deal, meetingsField)
-                      : '';
-                    const stageName = stageField ? readStr(deal, stageField) : '';
-                    const stageIdx = stages.findIndex((s) => s.name === stageName);
-                    const pastScope =
-                      sswStageIndex >= 0 &&
-                      stageIdx > sswStageIndex &&
-                      !/closed/i.test(stageName);
-                    const hasSSW = /\bssw\b|scoping/i.test(heldStr);
-                    const hasEB = /go\s*\/?\s*no[-\s]?go|\beb\b/i.test(heldStr);
-                    const warn = pastScope && (!hasSSW || !hasEB);
-                    const warnMissing = [
-                      !hasSSW ? 'SSW' : null,
-                      !hasEB ? 'EB Go/No-Go' : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' + ');
-                    return (
-                      <button
-                        key={deal.id}
-                        type="button"
-                        onClick={() => setOpenDealId(deal.id)}
-                        style={{
-                          width: '100%',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                          display: 'block',
-                          marginBottom: 10,
-                          padding: 12,
-                          borderRadius: 10,
-                          border: `2px solid ${
-                            dead ? '#c3ccd6' : warn ? T.redText : T.border
-                          }`,
-                          backgroundColor: dead ? '#eef1f5' : T.panel,
-                          boxShadow: `2px 2px 0 ${
-                            dead ? '#c3ccd6' : warn ? T.redText : T.border
-                          }`,
-                          opacity: dead ? 0.72 : 1,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            justifyContent: 'space-between',
-                            gap: 6,
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontSize: 13,
-                              fontWeight: 700,
-                              color: dead ? T.textMuted : T.text,
-                              textDecoration: dead ? 'line-through' : 'none',
-                              lineHeight: 1.4,
-                              wordBreak: 'break-word',
-                              flex: 1,
-                            }}
-                          >
-                            {readStr(deal, primary) || '(Untitled)'}
-                          </div>
-                          {dead ? (
-                            <span
-                              style={{
-                                flexShrink: 0,
-                                fontSize: 9,
-                                fontWeight: 800,
-                                letterSpacing: 0.5,
-                                lineHeight: 1.4,
-                                padding: '1px 5px',
-                                borderRadius: 6,
-                                backgroundColor: '#e5e9ee',
-                                color: T.textMuted,
-                                border: `1px solid #c3ccd6`,
-                              }}
-                            >
-                              DEAD
-                            </span>
-                          ) : (
-                            warn && (
-                              <span
-                                title={`Past scoping but missing ${warnMissing}`}
-                                style={{
-                                  flexShrink: 0,
-                                  fontSize: 11,
-                                  fontWeight: 800,
-                                  lineHeight: 1.2,
-                                  padding: '1px 5px',
-                                  borderRadius: 6,
-                                  backgroundColor: T.redSoft,
-                                  color: T.redText,
-                                  border: `1px solid ${T.redText}`,
-                                }}
-                              >
-                                ⚠
-                              </span>
-                            )
-                          )}
-                        </div>
-                        {account && (
-                          <div
-                            style={{
-                              fontSize: 12,
-                              color: T.textMuted,
-                              marginTop: 3,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {account}
-                          </div>
-                        )}
-                        {/* Meeting types held */}
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: 3,
-                            marginTop: 8,
-                          }}
-                        >
-                          {MEETING_TYPES.map((mt) => {
-                            const held = mt.re.test(heldStr);
-                            return (
-                              <span
-                                key={mt.abbr}
-                                title={`${mt.label}${held ? ' — held' : ' — not held'}`}
-                                style={{
-                                  fontSize: 9,
-                                  fontWeight: 700,
-                                  lineHeight: 1.5,
-                                  padding: '1px 4px',
-                                  borderRadius: 4,
-                                  border: `1px solid ${held ? T.border : '#cdd6e0'}`,
-                                  backgroundColor: held ? T.accent : '#fff',
-                                  color: held ? '#fff' : '#aab4c0',
-                                }}
-                              >
-                                {mt.abbr}
-                              </span>
-                            );
-                          })}
-                        </div>
-                        <div
-                          style={{
-                            marginTop: 8,
-                            display: 'flex',
-                            alignItems: 'flex-end',
-                            justifyContent: 'space-between',
-                            gap: 8,
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            {grossAcv && (
-                              <div
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: 800,
-                                  color: T.accentText,
-                                  lineHeight: 1.2,
-                                }}
-                              >
-                                {grossAcv}
-                                <span
-                                  style={{
-                                    fontSize: 9,
-                                    fontWeight: 600,
-                                    color: T.textMuted,
-                                  }}
-                                >
-                                  {'  '}gross
-                                </span>
-                              </div>
-                            )}
-                            {netAcv && (
-                              <div
-                                style={{
-                                  fontSize: 11,
-                                  fontWeight: 600,
-                                  color: T.textMuted,
-                                  marginTop: 1,
-                                }}
-                              >
-                                {netAcv} net new
-                              </div>
-                            )}
-                          </div>
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'flex-end',
-                              gap: 4,
-                              flexShrink: 0,
-                            }}
-                          >
-                            {quarter && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 800,
-                                  color: T.accentText,
-                                  backgroundColor: T.accentSoft,
-                                  border: `1px solid ${T.border}`,
-                                  borderRadius: 999,
-                                  padding: '1px 7px',
-                                }}
-                              >
-                                {quarter}
-                              </span>
-                            )}
-                            {briefN > 0 && (
-                              <span
-                                style={{
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  color: T.text,
-                                  backgroundColor: T.hint,
-                                  border: `1px solid ${T.border}`,
-                                  borderRadius: 999,
-                                  padding: '1px 6px',
-                                }}
-                              >
-                                {briefN} brief{briefN === 1 ? '' : 's'}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          );
-        })}
-        {columns.length === 0 && (
-          <div style={{ color: T.textMuted, fontSize: 14, padding: 24 }}>
-            No deal stages found on the Deals table.
-          </div>
-        )}
-      </div>
-
-      {openDeal && (
-        <DealModal
-          table={table}
-          deal={openDeal}
-          primary={primary}
-          stageField={stageField}
-          summaryFields={summaryFields}
-          brief={openBriefs[0] ?? null}
-          briefCount={openBriefs.length}
-          notesField={notesField}
-          deadField={deadField}
-          techWinField={techWinField}
-          dealRiskField={dealRiskField}
-          calendar={calendar}
-          events={eventsByDeal[openDeal.id] ?? []}
-          canUpdate={canUpdate}
-          onClose={() => setOpenDealId(null)}
-        />
-      )}
-    </div>
+  const [dialogComputer, setDialogComputer] = useState<ComputerStation | null>(
+    null
   );
-}
+  const [computerLine1Shown, setComputerLine1Shown] = useState('');
+  const [computerLine2Shown, setComputerLine2Shown] = useState('');
+  const [computerDialogPhase, setComputerDialogPhase] = useState<
+    'line1' | 'line2' | 'menu' | null
+  >(null);
+  const [computerMenuYes, setComputerMenuYes] = useState(true);
+  const [openBrowser, setOpenBrowser] = useState<ComputerStation | null>(null);
 
-// ---------------------------------------------------------------------------
-// Calendar view
-// ---------------------------------------------------------------------------
-
-function CalEventCard({
-  calendar,
-  ev,
-  dealOptions,
-  canUpdate,
-}: {
-  calendar: CalendarBundle;
-  ev: AnyRecord;
-  dealOptions: { id: string; name: string }[];
-  canUpdate: boolean;
-}) {
-  const [saving, setSaving] = useState(false);
-  const title = calendar.title ? readStr(ev, calendar.title) : '(Untitled)';
-  const time = eventTimeLabel(ev, calendar.start, calendar.end, calendar.allDay);
-  const actType = calendar.activityType ? readStr(ev, calendar.activityType) : '';
-  const currentOpp = linkedIds(ev, calendar.opportunity)[0] ?? '';
-
-  const assign = async (dealId: string) => {
-    if (!calendar.table || !calendar.opportunity) return;
-    setSaving(true);
-    try {
-      await (
-        calendar.table as unknown as {
-          updateRecordAsync: (r: string, f: Record<string, unknown>) => Promise<void>;
-        }
-      ).updateRecordAsync(ev.id, {
-        [calendar.opportunity.id]: dealId ? [{ id: dealId }] : [],
-      });
-    } catch {
-      /* ignore */
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div
-      style={{
-        marginBottom: 8,
-        padding: 8,
-        borderRadius: 8,
-        border: `2px solid ${currentOpp ? T.accent : T.border}`,
-        backgroundColor: T.panel,
-        opacity: saving ? 0.6 : 1,
-      }}
-    >
-      <div style={{ fontSize: 10, fontWeight: 700, color: T.accentText }}>
-        {time}
-      </div>
-      <div
-        style={{
-          fontSize: 12,
-          fontWeight: 700,
-          color: T.text,
-          lineHeight: 1.35,
-          margin: '2px 0 4px',
-          wordBreak: 'break-word',
-        }}
-      >
-        {title}
-      </div>
-      {actType && (
-        <div
-          style={{
-            display: 'inline-block',
-            fontSize: 9,
-            fontWeight: 700,
-            color: T.textMuted,
-            backgroundColor: '#eef2f7',
-            border: `1px solid ${T.border}`,
-            borderRadius: 4,
-            padding: '1px 5px',
-            marginBottom: 6,
-          }}
-        >
-          {actType}
-        </div>
-      )}
-      {calendar.opportunity && (
-        <select
-          value={currentOpp}
-          disabled={saving || !canUpdate}
-          onChange={(e) => assign(e.target.value)}
-          title="Assign to Opportunity"
-          style={{
-            width: '100%',
-            fontFamily: FONT,
-            fontSize: 11,
-            padding: '4px 6px',
-            borderRadius: 6,
-            border: `2px solid ${currentOpp ? T.accent : T.borderStrong}`,
-            backgroundColor: currentOpp ? T.accentSoft : T.panel,
-            color: T.text,
-            outline: 'none',
-          }}
-        >
-          <option value="">— Unassigned —</option>
-          {dealOptions.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
-            </option>
-          ))}
-        </select>
-      )}
-    </div>
+  const gameRef = useRef<HTMLDivElement | null>(null);
+  const typeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const computerTypeTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
   );
-}
+  const scaleHostRef = useRef<HTMLDivElement | null>(null);
+  const [frameScale, setFrameScale] = useState(1);
 
-function CalendarView({
-  calendar,
-  records,
-  dealOptions,
-  canUpdate,
-}: {
-  calendar: CalendarBundle;
-  records: AnyRecords;
-  dealOptions: { id: string; name: string }[];
-  canUpdate: boolean;
-}) {
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
-  const [unassignedOnly, setUnassignedOnly] = useState(false);
+  /** Unscaled outer size (bezel pad + pixel grid); used only for proportional layout spacing. */
+  const frameUnscaledW = COLS * TILE + BEZEL_PAD * 2;
+  const frameUnscaledH = ROWS * TILE + BEZEL_PAD * 2;
 
-  const recordList = (records ?? []) as unknown as AnyRecord[];
-  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  const keyOf = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-  const today = new Date();
+  useEffect(() => {
+    const host = scaleHostRef.current;
+    if (!host) return;
 
-  const eventsByDay = useMemo(() => {
-    const map: Record<string, AnyRecord[]> = {};
-    for (const d of days) map[keyOf(d)] = [];
-    for (const ev of recordList) {
-      const s = eventDate(ev, calendar.start);
-      if (!s) continue;
-      if (unassignedOnly && linkedIds(ev, calendar.opportunity).length > 0) continue;
-      const k = keyOf(s);
-      if (map[k]) map[k].push(ev);
+    const EDGE = 10;
+
+    function updateScale() {
+      const { width: cw, height: ch } = host.getBoundingClientRect();
+      const availW = Math.max(cw - EDGE, 0);
+      const availH = Math.max(ch - EDGE, 0);
+      if (availW <= 1 || availH <= 1) return;
+      const s = Math.min(availW / frameUnscaledW, availH / frameUnscaledH);
+      /** Cap so sprites stay crisp on huge monitors */
+      const clamped = Math.min(Math.max(s, 0.4), 6);
+      setFrameScale(clamped);
     }
-    for (const k of Object.keys(map)) {
-      map[k].sort(
-        (a, b) =>
-          (eventDate(a, calendar.start)?.getTime() ?? 0) -
-          (eventDate(b, calendar.start)?.getTime() ?? 0)
+
+    updateScale();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(updateScale);
+    });
+    const ro = new ResizeObserver(() => updateScale());
+    ro.observe(host);
+    window.addEventListener('resize', updateScale);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', updateScale);
+    };
+  }, [frameUnscaledW, frameUnscaledH]);
+
+  const line1Full = dialogNpc ? `${dialogNpc.name} wants to chat!` : '';
+
+  const getBriefsForRecordId = useCallback(
+    (recordId: string | null): BriefSnapshotView[] => {
+      if (!recordId || !briefSnapshotsRecords || !briefSnapshotsTable) {
+        return [];
+      }
+      // Link field back to the Deal Team member this brief is framed for.
+      const forMemberField =
+        briefSnapshotsTable.getFieldIfExists('For Team Member') ?? null;
+      if (!forMemberField) return [];
+
+      // Linked-record cell values may be { id } objects or raw id strings.
+      const idOf = (l: unknown): string =>
+        typeof l === 'string' ? l : (l as { id?: string } | null)?.id ?? '';
+
+      const primaryField =
+        briefSnapshotsTable.fields.find((f) => f.isPrimaryField) ?? null;
+      const dateField = briefSnapshotsTable.getFieldIfExists('Snapshot Date');
+      const dealField = briefSnapshotsTable.getFieldIfExists('Deal');
+
+      // Brief body = narrative fields only: drop record links, the primary
+      // title, and the date (those are surfaced in the title / subtitle).
+      const bodyFields = briefSnapshotsTable.fields.filter(
+        (f) =>
+          f.id !== primaryField?.id &&
+          f.id !== dateField?.id &&
+          String(f.type) !== 'multipleRecordLinks'
       );
+
+      const readStr = (rec: unknown, field: unknown): string => {
+        if (!rec || !field) return '';
+        try {
+          return (
+            (rec as {
+              getCellValueAsString: (f: unknown) => string;
+            }).getCellValueAsString(field) || ''
+          );
+        } catch {
+          return '';
+        }
+      };
+      const readDate = (rec: { getCellValue: (f: unknown) => unknown }) => {
+        if (!dateField) return '';
+        try {
+          const v = rec.getCellValue(dateField);
+          return typeof v === 'string' ? v : '';
+        } catch {
+          return '';
+        }
+      };
+
+      const matching = briefSnapshotsRecords.filter((snap) => {
+        let linked: unknown = null;
+        try {
+          linked = snap.getCellValue(forMemberField);
+        } catch {
+          linked = null;
+        }
+        return Array.isArray(linked) && linked.some((l) => idOf(l) === recordId);
+      });
+
+      // Newest snapshot first (ISO date strings sort lexically).
+      matching.sort((a, b) => readDate(b).localeCompare(readDate(a)));
+
+      return matching.map((snap) => {
+        const dateStr = dateField ? readStr(snap, dateField) : '';
+        const dealStr = dealField ? readStr(snap, dealField) : '';
+        return {
+          id: snap.id,
+          title:
+            (primaryField ? readStr(snap, primaryField) : '') ||
+            dateStr ||
+            'BRIEF',
+          subtitle: [dateStr, dealStr].filter(Boolean).join('  ·  '),
+          sections: bodyFields
+            .map((f) => ({ label: f.name, value: readStr(snap, f) }))
+            .filter((s) => s.value),
+        };
+      });
+    },
+    [briefSnapshotsRecords, briefSnapshotsTable]
+  );
+
+  const facedTile = useMemo(
+    () => facingCell(player.x, player.y, direction),
+    [player, direction]
+  );
+
+  const facingNpc = useMemo(() => {
+    const { x: fx, y: fy } = facedTile;
+    const direct = npcs.find((n) => n.x === fx && n.y === fy);
+    if (direct) return direct;
+    // Facing the front of a counter — talk to the clerk standing behind it.
+    const station = deskStationOwningTile(fx, fy, deskStations);
+    if (!station) return null;
+    return (
+      npcs.find(
+        (n) => n.x === station.clerk.x && n.y === station.clerk.y
+      ) ?? null
+    );
+  }, [facedTile, npcs, deskStations]);
+
+  const facingComputer = useMemo(
+    () => computerStationAtTile(facedTile.x, facedTile.y),
+    [facedTile]
+  );
+
+  useEffect(() => {
+    gameRef.current?.focus();
+  }, [records, table]);
+
+  useEffect(() => {
+    if (records?.length != null) {
+      setPlayer({ x: Math.floor(COLS / 2), y: ROWS - 2 });
+      setPlayerMotion(null);
     }
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordList, weekStart, unassignedOnly, calendar]);
+  }, [records?.length, npcs.length]);
 
-  const weekLabel = `${weekStart.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-  })} – ${addDays(weekStart, 6).toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })}`;
+  useEffect(() => {
+    if (!dialogNpc) {
+      setLine1Shown('');
+      setLine2Shown('');
+      setDialogPhase(null);
+      if (typeTimerRef.current) {
+        clearInterval(typeTimerRef.current);
+        typeTimerRef.current = null;
+      }
+      return;
+    }
+    setLine1Shown('');
+    setLine2Shown('');
+    setDialogPhase('line1');
+    setMenuYes(true);
+    if (typeTimerRef.current) clearInterval(typeTimerRef.current);
 
-  const navBtnStyle: React.CSSProperties = {
-    cursor: 'pointer',
-    fontSize: 13,
-    fontWeight: 700,
-    padding: '7px 12px',
-    borderRadius: 8,
-    border: `2px solid ${T.border}`,
-    backgroundColor: T.panel,
-    color: T.text,
-  };
+    const full1 = `${dialogNpc.name} wants to chat!`;
 
-  if (!calendar.table) {
+    let i1 = 0;
+    typeTimerRef.current = setInterval(() => {
+      i1 += 1;
+      setLine1Shown(full1.slice(0, i1));
+      if (i1 >= full1.length) {
+        if (typeTimerRef.current) clearInterval(typeTimerRef.current);
+        typeTimerRef.current = null;
+        setDialogPhase('menu');
+      }
+    }, 38);
+
+    return () => {
+      if (typeTimerRef.current) {
+        clearInterval(typeTimerRef.current);
+        typeTimerRef.current = null;
+      }
+    };
+  }, [dialogNpc]);
+
+  useEffect(() => {
+    if (!dialogComputer) {
+      setComputerLine1Shown('');
+      setComputerLine2Shown('');
+      setComputerDialogPhase(null);
+      if (computerTypeTimerRef.current) {
+        clearInterval(computerTypeTimerRef.current);
+        computerTypeTimerRef.current = null;
+      }
+      return;
+    }
+    setComputerLine1Shown('');
+    setComputerLine2Shown('');
+    setComputerDialogPhase('line1');
+    setComputerMenuYes(true);
+    if (computerTypeTimerRef.current) clearInterval(computerTypeTimerRef.current);
+
+    const full1 = dialogComputer.terminalTitle;
+    const full2 = dialogComputer.promptText;
+
+    let i1 = 0;
+    computerTypeTimerRef.current = setInterval(() => {
+      i1 += 1;
+      setComputerLine1Shown(full1.slice(0, i1));
+      if (i1 >= full1.length) {
+        if (computerTypeTimerRef.current)
+          clearInterval(computerTypeTimerRef.current);
+        computerTypeTimerRef.current = null;
+        setComputerDialogPhase('line2');
+        let i2 = 0;
+        computerTypeTimerRef.current = setInterval(() => {
+          i2 += 1;
+          setComputerLine2Shown(full2.slice(0, i2));
+          if (i2 >= full2.length) {
+            if (computerTypeTimerRef.current)
+              clearInterval(computerTypeTimerRef.current);
+            computerTypeTimerRef.current = null;
+            setComputerDialogPhase('menu');
+          }
+        }, 38);
+      }
+    }, 38);
+
+    return () => {
+      if (computerTypeTimerRef.current) {
+        clearInterval(computerTypeTimerRef.current);
+        computerTypeTimerRef.current = null;
+      }
+    };
+  }, [dialogComputer]);
+
+  useEffect(() => {
+    if (!playerMotion) return;
+    let raf = 0;
+    let cancelled = false;
+    const step = (): void => {
+      if (cancelled) return;
+      const elapsed = performance.now() - playerMotion.start;
+      if (elapsed >= MOVE_GRID_MS) {
+        if (!cancelled) {
+          setPlayer({ x: playerMotion.tx, y: playerMotion.ty });
+          setPlayerMotion(null);
+        }
+        return;
+      }
+      setMoveAnimTick(performance.now());
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [playerMotion]);
+
+  const displayGrid = useMemo(() => {
+    void moveAnimTick;
+    const m = playerMotion;
+    if (!m)
+      return { x: player.x, y: player.y } as const;
+    const u = smoothstep01((performance.now() - m.start) / MOVE_GRID_MS);
+    return {
+      x: m.fx + (m.tx - m.fx) * u,
+      y: m.fy + (m.ty - m.fy) * u,
+    } as const;
+  }, [playerMotion, player.x, player.y, moveAnimTick]);
+
+  const tryMove = useCallback(
+    (dir: Direction) => {
+      if (
+        dialogNpc ||
+        showBrief ||
+        playerMotion ||
+        dialogComputer ||
+        openBrowser
+      )
+        return;
+      setDirection(dir);
+      const { dx, dy } = DIR_VEC[dir];
+      const nx = player.x + dx;
+      const ny = player.y + dy;
+      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return;
+      if (blockedCells.has(keyXY(nx, ny))) return;
+      setWalkFrame((f) => (f === 0 ? 1 : 0));
+      setPlayerMotion({
+        fx: player.x,
+        fy: player.y,
+        tx: nx,
+        ty: ny,
+        start: performance.now(),
+      });
+    },
+    [
+      player,
+      blockedCells,
+      dialogNpc,
+      showBrief,
+      playerMotion,
+      dialogComputer,
+      openBrowser,
+    ]
+  );
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (showBrief || openBrowser) return;
+
+      if (dialogComputer) {
+        if (e.key === 'ArrowLeft') {
+          if (computerDialogPhase === 'menu') {
+            e.preventDefault();
+            setComputerMenuYes(true);
+          }
+        } else if (e.key === 'ArrowRight') {
+          if (computerDialogPhase === 'menu') {
+            e.preventDefault();
+            setComputerMenuYes(false);
+          }
+        } else if (
+          e.key === 'Escape' ||
+          e.key === 'b' ||
+          e.key === 'B'
+        ) {
+          e.preventDefault();
+          setDialogComputer(null);
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (
+            computerDialogPhase === 'line1' ||
+            computerDialogPhase === 'line2'
+          ) {
+            setComputerLine1Shown(dialogComputer.terminalTitle);
+            setComputerLine2Shown(dialogComputer.promptText);
+            setComputerDialogPhase('menu');
+            if (computerTypeTimerRef.current) {
+              clearInterval(computerTypeTimerRef.current);
+              computerTypeTimerRef.current = null;
+            }
+          } else if (computerDialogPhase === 'menu') {
+            const willOpen = computerMenuYes ? dialogComputer : null;
+            setDialogComputer(null);
+            if (willOpen) setOpenBrowser(willOpen);
+          }
+        }
+        return;
+      }
+
+      if (dialogNpc) {
+        if (e.key === 'ArrowLeft') {
+          if (dialogPhase === 'menu') {
+            e.preventDefault();
+            setMenuYes(true);
+          }
+        } else if (e.key === 'ArrowRight') {
+          if (dialogPhase === 'menu') {
+            e.preventDefault();
+            setMenuYes(false);
+          }
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          if (dialogPhase === 'line1' || dialogPhase === 'line2') {
+            setLine1Shown(line1Full);
+            setDialogPhase('menu');
+            if (typeTimerRef.current) {
+              clearInterval(typeTimerRef.current);
+              typeTimerRef.current = null;
+            }
+          } else if (dialogPhase === 'menu') {
+            if (menuYes) {
+              setBriefRecordId(dialogNpc.recordId);
+              setBriefAeName(dialogNpc.name);
+              setShowBrief(true);
+            }
+            setDialogNpc(null);
+          }
+        }
+        return;
+      }
+
+      let moved: Direction | null = null;
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') moved = 'up';
+      else if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S')
+        moved = 'down';
+      else if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A')
+        moved = 'left';
+      else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D')
+        moved = 'right';
+
+      if (moved) {
+        e.preventDefault();
+        tryMove(moved);
+        return;
+      }
+
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (facingNpc) {
+          e.preventDefault();
+          setDialogNpc(facingNpc);
+        } else if (facingComputer && facingComputer.interactive) {
+          // Only interactive terminals (Source Records) open; Events / Risky
+          // Deals are visual-only.
+          e.preventDefault();
+          setDialogComputer(facingComputer);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    tryMove,
+    dialogNpc,
+    dialogPhase,
+    menuYes,
+    facingNpc,
+    facingComputer,
+    line1Full,
+    showBrief,
+    openBrowser,
+    dialogComputer,
+    computerDialogPhase,
+    computerMenuYes,
+  ]);
+
+  if (!table || !records) {
     return (
       <div
+        className="w-full h-full flex items-center justify-center"
         style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: T.textMuted,
-          fontSize: 14,
-          textAlign: 'center',
-          padding: 24,
+          backgroundColor: PK.sky,
+          fontFamily: '"Press Start 2P", monospace',
+          fontSize: '12px',
+          color: PK.text,
         }}
       >
-        Bind the Calendar table in the element's settings panel to use this view.
+        LOADING...
       </div>
     );
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Toolbar */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: 16,
-          flexWrap: 'wrap',
-        }}
-      >
-        <button
-          type="button"
-          onClick={() => setWeekStart((w) => addDays(w, -7))}
-          style={navBtnStyle}
-        >
-          ‹
-        </button>
-        <button
-          type="button"
-          onClick={() => setWeekStart(startOfWeek(new Date()))}
-          style={{ ...navBtnStyle, backgroundColor: T.hint }}
-        >
-          Today
-        </button>
-        <button
-          type="button"
-          onClick={() => setWeekStart((w) => addDays(w, 7))}
-          style={navBtnStyle}
-        >
-          ›
-        </button>
-        <span style={{ fontSize: 15, fontWeight: 800, color: T.text }}>
-          {weekLabel}
-        </span>
-        <label
-          style={{
-            marginLeft: 'auto',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 13,
-            fontWeight: 600,
-            color: T.text,
-            cursor: 'pointer',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={unassignedOnly}
-            onChange={(e) => setUnassignedOnly(e.target.checked)}
-          />
-          Unassigned only
-        </label>
-      </div>
+    <div
+      className="w-full h-full flex flex-col overflow-hidden"
+      style={{
+        backgroundColor: PK.ink,
+        fontFamily: '"Press Start 2P", monospace',
+      }}
+    >
+      <link
+        href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
+        rel="stylesheet"
+      />
 
-      {/* Week grid */}
       <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          gap: 8,
-          overflowX: 'auto',
-        }}
+        className="flex-1 flex flex-col min-h-0 w-full min-w-0"
+        style={{ backgroundColor: PK.skyDeep }}
       >
-        {days.map((d) => {
-          const list = eventsByDay[keyOf(d)] ?? [];
-          const isToday = sameDay(d, today);
-          return (
+        <div
+          ref={scaleHostRef}
+          className="flex-1 flex min-h-[120px] w-full items-center justify-center px-2 py-2 overflow-visible"
+          style={{ minHeight: 0 }}
+        >
+          <div
+            className="flex shrink-0 items-center justify-center"
+            style={{
+              width: frameUnscaledW * frameScale,
+              height: frameUnscaledH * frameScale,
+            }}
+          >
             <div
-              key={keyOf(d)}
+              className="relative"
               style={{
-                flex: 1,
-                minWidth: 150,
-                display: 'flex',
-                flexDirection: 'column',
-                backgroundColor: '#eef4fb',
-                border: `2px solid ${isToday ? T.accent : T.border}`,
-                borderRadius: 12,
-                overflow: 'hidden',
+                transform: `scale(${frameScale})`,
+                transformOrigin: 'center center',
+                padding: BEZEL_PAD,
+                backgroundColor: PK.ink,
+                borderRadius: 4,
+                boxShadow: `
+                inset 0 0 0 4px ${PK.shelfMid},
+                0 0 0 4px ${PK.ink},
+                0 0 0 8px ${PK.hint}
+              `,
               }}
             >
               <div
+                ref={gameRef}
+                tabIndex={0}
+                className="relative outline-none overflow-visible"
                 style={{
-                  padding: '8px 10px',
-                  borderBottom: `2px solid ${T.border}`,
-                  backgroundColor: isToday ? T.hint : T.headerBar,
-                  color: T.text,
+                  width: COLS * TILE,
+                  height: ROWS * TILE,
+                  backgroundColor: PK.floorBase,
                 }}
+                onMouseDown={() => gameRef.current?.focus()}
               >
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>
-                  {d.toLocaleDateString([], { weekday: 'short' })}
-                </div>
-                <div style={{ fontSize: 15, fontWeight: 800 }}>{d.getDate()}</div>
-              </div>
-              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 8 }}>
-                {list.length === 0 ? (
+                <TileLayer deskStations={deskStations} />
+                <RoomDecorations deskStations={deskStations} />
+                {COMPUTER_STATIONS.map((station) => (
+                  <React.Fragment key={`computer-${station.key}`}>
+                    <DecorLayer
+                      left={station.anchor.x}
+                      top={station.anchor.y}
+                      wTiles={station.wTiles}
+                      hTiles={1}
+                    >
+                      <PixelPokeComputer />
+                    </DecorLayer>
+                    <div
+                      className="absolute pointer-events-none flex justify-center"
+                      style={{
+                        left: station.anchor.x * TILE,
+                        top: station.anchor.y * TILE - 11,
+                        width: station.wTiles * TILE,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontFamily: '"Press Start 2P", monospace',
+                          fontSize: '5px',
+                          color: PK.text,
+                          backgroundColor: PK.dialogPaper,
+                          border: `1px solid ${PK.ink}`,
+                          padding: '1px 3px',
+                          whiteSpace: 'nowrap',
+                          letterSpacing: '0.5px',
+                          lineHeight: 1,
+                        }}
+                      >
+                        {station.label}
+                      </div>
+                    </div>
+                  </React.Fragment>
+                ))}
+                {npcs.map((npc, i) => (
                   <div
+                    key={npc.recordId}
+                    className="absolute pointer-events-none"
                     style={{
-                      fontSize: 11,
-                      color: T.textSubtle,
-                      textAlign: 'center',
-                      padding: '10px 0',
+                      left: npc.x * TILE,
+                      top: npc.y * TILE,
+                      width: TILE,
+                      height: TILE,
                     }}
                   >
-                    —
-                  </div>
-                ) : (
-                  list.map((ev) => (
-                    <CalEventCard
-                      key={ev.id}
-                      calendar={calendar}
-                      ev={ev}
-                      dealOptions={dealOptions}
-                      canUpdate={canUpdate}
+                    <NpcFigure
+                      name={npc.name}
+                      variant={i % AE_VARIANT_FRAMES.length}
                     />
-                  ))
-                )}
+                  </div>
+                ))}
+                <div
+                  className="absolute flex items-center justify-center pointer-events-none"
+                  style={{
+                    left: displayGrid.x * TILE,
+                    top: displayGrid.y * TILE,
+                    width: TILE,
+                    height: TILE,
+                  }}
+                >
+                  <div
+                    style={{ transform: 'scale(2)', transformOrigin: '50% 80%' }}
+                  >
+                    <AshSpriteDraw frame={walkFrame} dir={direction} />
+                  </div>
+                </div>
+                {facingNpc &&
+                  !dialogNpc &&
+                  !dialogComputer &&
+                  !openBrowser &&
+                  !showBrief && (
+                    <div
+                      className="absolute pointer-events-none z-[10]"
+                      style={{
+                        left: facingNpc.x * TILE + TILE / 2 - 4,
+                        top: facingNpc.y * TILE - 28,
+                      }}
+                    >
+                      <svg
+                        width={8}
+                        height={10}
+                        viewBox="0 0 8 10"
+                        shapeRendering="crispEdges"
+                        style={{ imageRendering: 'pixelated' }}
+                      >
+                        <rect x="3" y="0" width="2" height="1" fill={PK.ink} />
+                        <rect x="2" y="1" width="4" height="1" fill={PK.ink} />
+                        <rect x="3" y="1" width="2" height="1" fill={PK.hint} />
+                        <rect x="2" y="2" width="4" height="4" fill={PK.ink} />
+                        <rect x="3" y="2" width="2" height="3" fill={PK.hint} />
+                        <rect x="2" y="6" width="4" height="1" fill={PK.ink} />
+                        <rect x="3" y="6" width="2" height="1" fill={PK.hint} />
+                        <rect x="2" y="8" width="4" height="2" fill={PK.ink} />
+                        <rect x="3" y="8" width="2" height="1" fill={PK.hint} />
+                      </svg>
+                    </div>
+                  )}
+                {facingComputer &&
+                  facingComputer.interactive &&
+                  !facingNpc &&
+                  !dialogNpc &&
+                  !dialogComputer &&
+                  !openBrowser &&
+                  !showBrief && (
+                    <div
+                      className="absolute pointer-events-none z-[10]"
+                      style={{
+                        left:
+                          (facingComputer.anchor.x +
+                            facingComputer.wTiles / 2) *
+                            TILE -
+                          4,
+                        top: facingComputer.anchor.y * TILE - 28,
+                      }}
+                    >
+                      <svg
+                        width={8}
+                        height={10}
+                        viewBox="0 0 8 10"
+                        shapeRendering="crispEdges"
+                        style={{ imageRendering: 'pixelated' }}
+                      >
+                        <rect x="3" y="0" width="2" height="1" fill={PK.ink} />
+                        <rect x="2" y="1" width="4" height="1" fill={PK.ink} />
+                        <rect x="3" y="1" width="2" height="1" fill={PK.hint} />
+                        <rect x="2" y="2" width="4" height="4" fill={PK.ink} />
+                        <rect x="3" y="2" width="2" height="3" fill={PK.hint} />
+                        <rect x="2" y="6" width="4" height="1" fill={PK.ink} />
+                        <rect x="3" y="6" width="2" height="1" fill={PK.hint} />
+                        <rect x="2" y="8" width="4" height="2" fill={PK.ink} />
+                        <rect x="3" y="8" width="2" height="1" fill={PK.hint} />
+                      </svg>
+                    </div>
+                  )}
+                <div
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background: `repeating-linear-gradient(to bottom, transparent 0px, transparent 2px, ${PK.scanline} 2px, ${PK.scanline} 3px)`,
+                    mixBlendMode: 'multiply',
+                  }}
+                />
               </div>
             </div>
-          );
-        })}
+          </div>
+        </div>
+
+        <div
+          className="flex-shrink-0 text-center px-2 pb-2"
+          style={{
+            fontSize: '6px',
+            color: PK.dialogInner,
+            maxWidth: '100%',
+          }}
+        >
+          WASD / ARROWS MOVE · FACE NPC OR TERMINAL + ENTER · ← → CHOOSE YES / NO
+        </div>
       </div>
+
+      <div className="p-2 flex-shrink-0" style={{ backgroundColor: PK.skyDeep }}>
+        <DialogBox>
+          {dialogComputer ? (
+            <div>
+              <div
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '12px',
+                  lineHeight: 1.7,
+                  color: PK.text,
+                  minHeight: '3.5em',
+                }}
+              >
+                <span style={{ color: PK.shelfAccent }}>
+                  {computerLine1Shown}
+                </span>
+                {computerDialogPhase === 'line1' &&
+                  computerLine1Shown.length <
+                    dialogComputer.terminalTitle.length && (
+                    <span style={{ opacity: 0.9 }}>▍</span>
+                  )}
+                {(computerDialogPhase === 'line2' ||
+                  computerDialogPhase === 'menu' ||
+                  (computerDialogPhase === 'line1' &&
+                    computerLine1Shown.length >=
+                      dialogComputer.terminalTitle.length)) && (
+                  <>
+                    <br />
+                    <br />
+                    {computerLine2Shown}
+                    {computerDialogPhase === 'line2' &&
+                      computerLine2Shown.length <
+                        dialogComputer.promptText.length && (
+                        <span style={{ opacity: 0.9 }}>▍</span>
+                      )}
+                  </>
+                )}
+              </div>
+              {computerDialogPhase === 'menu' && (
+                <div
+                  className="mt-4 flex gap-8"
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '11px',
+                  }}
+                >
+                  <span style={{ color: PK.text }}>
+                    {computerMenuYes ? '▶ ' : '  '}
+                    YES
+                  </span>
+                  <span style={{ color: PK.text }}>
+                    {!computerMenuYes ? '▶ ' : '  '}NO
+                  </span>
+                </div>
+              )}
+              <div
+                className="mt-3"
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  color: PK.textMuted,
+                }}
+              >
+                ENTER / SPACE: ADVANCE · ← → : SELECT · B OR ESC: CANCEL
+              </div>
+            </div>
+          ) : !dialogNpc ? (
+            <div
+              style={{
+                fontFamily: '"Press Start 2P", monospace',
+                fontSize: '12px',
+                lineHeight: 1.8,
+                color: PK.text,
+              }}
+            >
+              1-ON-1 POKé MART
+              <br />
+              <span style={{ fontSize: '10px' }}>
+                APPROACH A TEAM MEMBER OR TERMINAL AND PRESS ENTER.
+              </span>
+            </div>
+          ) : (
+            <div>
+              <div
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '12px',
+                  lineHeight: 1.7,
+                  color: PK.text,
+                  minHeight: '3.5em',
+                }}
+              >
+                {line1Shown}
+                {dialogPhase === 'line1' &&
+                  line1Shown.length < line1Full.length && (
+                    <span style={{ opacity: 0.9 }}>▍</span>
+                  )}
+              </div>
+              {dialogPhase === 'menu' && (
+                <div
+                  className="mt-4 flex gap-8"
+                  style={{
+                    fontFamily: '"Press Start 2P", monospace',
+                    fontSize: '11px',
+                  }}
+                >
+                  <span style={{ color: PK.text }}>
+                    {menuYes ? '▶ ' : '  '}
+                    YES
+                  </span>
+                  <span style={{ color: PK.text }}>
+                    {!menuYes ? '▶ ' : '  '}NO
+                  </span>
+                </div>
+              )}
+              <div
+                className="mt-3"
+                style={{
+                  fontFamily: '"Press Start 2P", monospace',
+                  fontSize: '8px',
+                  color: PK.textMuted,
+                }}
+              >
+                ENTER / SPACE: ADVANCE · ← → : SELECT · B OR ESC CLOSES BRIEF
+              </div>
+            </div>
+          )}
+        </DialogBox>
+      </div>
+
+      {showBrief && (
+        <BriefViewer
+          briefs={getBriefsForRecordId(briefRecordId)}
+          aeName={briefAeName || 'AE'}
+          onClose={() => {
+            setShowBrief(false);
+            setBriefRecordId(null);
+            setBriefAeName('');
+          }}
+        />
+      )}
+
+      {openBrowser && openBrowser.key === 'source-records' && (
+        <SourceRecordsReview
+          station={openBrowser}
+          table={sourceRecordsTable}
+          records={sourceRecordsRecords}
+          onClose={() => setOpenBrowser(null)}
+        />
+      )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Root
-// ---------------------------------------------------------------------------
-
-function DealPodConsole() {
-  const { customPropertyValueByKey, errorState } =
-    useCustomProperties(getCustomProperties);
-  const dealTeamTable = (customPropertyValueByKey.dealTeamTable ??
-    null) as AnyTable;
-  const briefSnapshotsTable = (customPropertyValueByKey.briefSnapshotsTable ??
-    null) as AnyTable;
-  const sourceRecordsTable = (customPropertyValueByKey.sourceRecordsTable ??
-    null) as AnyTable;
-  const dealsTable = (customPropertyValueByKey.dealsTable ?? null) as AnyTable;
-  const calendarTable = (customPropertyValueByKey.calendarTable ??
-    null) as AnyTable;
-
-  const dealTeamRecords = useRecords(dealTeamTable ?? null);
-  const briefSnapshotsRecords = useRecords(briefSnapshotsTable ?? null);
-  const sourceRecordsRecords = useRecords(sourceRecordsTable ?? null);
-  const dealsRecords = useRecords(dealsTable ?? null);
-  const calendarRecords = useRecords(calendarTable ?? null);
-
-  const [view, setView] = useState<'briefs' | 'review' | 'deals' | 'calendar'>(
-    'deals'
-  );
-
-  // Calendar field bundle + events grouped by linked Opportunity (deal).
-  const calendar = useMemo<CalendarBundle>(
-    () => ({
-      table: calendarTable,
-      title: primaryField(calendarTable) ?? fieldByName(calendarTable, 'Title'),
-      start: fieldByName(calendarTable, 'Start'),
-      end: fieldByName(calendarTable, 'End'),
-      allDay: fieldByName(calendarTable, 'All Day'),
-      activityType: fieldByName(calendarTable, 'Activity Type'),
-      logActivity: fieldByName(calendarTable, 'Log Activity'),
-      opportunity: fieldByName(calendarTable, 'Opportunity'),
-      location: fieldByName(calendarTable, 'Location'),
-    }),
-    [calendarTable]
-  );
-
-  const eventsByDeal = useMemo(() => {
-    const map: Record<string, AnyRecord[]> = {};
-    if (!calendar.table || !calendarRecords || !calendar.opportunity) return map;
-    for (const ev of calendarRecords as unknown as AnyRecord[]) {
-      for (const dealId of linkedIds(ev, calendar.opportunity)) {
-        (map[dealId] ||= []).push(ev);
-      }
-    }
-    for (const k of Object.keys(map)) {
-      map[k].sort(
-        (a, b) =>
-          (eventDate(a, calendar.start)?.getTime() ?? 0) -
-          (eventDate(b, calendar.start)?.getTime() ?? 0)
-      );
-    }
-    return map;
-  }, [calendar, calendarRecords]);
-
-  const dealOptions = useMemo(() => {
-    if (!dealsTable || !dealsRecords) return [];
-    const p = primaryField(dealsTable);
-    return (dealsRecords as unknown as AnyRecord[])
-      .map((r) => ({ id: r.id, name: readStr(r, p) || '(Untitled)' }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [dealsTable, dealsRecords]);
-
-  // Build briefs grouped by team-member record id. Linked-record cell values
-  // can come back as either { id } objects or raw id strings, so normalize.
-  const briefsByMember = useMemo(() => {
-    const map: Record<string, BriefView[]> = {};
-    if (!briefSnapshotsTable || !briefSnapshotsRecords) return map;
-
-    const primary = primaryField(briefSnapshotsTable);
-    const dateField = fieldByName(briefSnapshotsTable, 'Snapshot Date');
-    const dealField = fieldByName(briefSnapshotsTable, 'Deal');
-    const forMemberField = fieldByName(briefSnapshotsTable, 'For Team Member');
-    const bodyFields = fieldsOf(briefSnapshotsTable).filter(
-      (f) =>
-        f.id !== primary?.id &&
-        f.id !== dateField?.id &&
-        String(f.type) !== 'multipleRecordLinks'
-    );
-
-    const idOf = (l: unknown): string =>
-      typeof l === 'string' ? l : (l as { id?: string } | null)?.id ?? '';
-
-    const viewOf = (snap: AnyRecord): BriefView => {
-      const dateStr = dateField ? readStr(snap, dateField) : '';
-      const dealStr = dealField ? readStr(snap, dealField) : '';
-      return {
-        id: snap.id,
-        title: (primary ? readStr(snap, primary) : '') || dateStr || 'Brief',
-        subtitle: [dateStr, dealStr].filter(Boolean).join('  ·  '),
-        sortKey: String(dateField ? readRaw(snap, dateField) ?? '' : ''),
-        sections: bodyFields
-          .map((f) => ({ label: f.name, value: readStr(snap, f) }))
-          .filter((s) => s.value),
-      };
-    };
-
-    const snaps = briefSnapshotsRecords as unknown as AnyRecord[];
-    const viewById: Record<string, BriefView> = {};
-    for (const snap of snaps) viewById[snap.id] = viewOf(snap);
-
-    const push = (memberId: string, view: BriefView | undefined) => {
-      if (!memberId || !view) return;
-      const arr = (map[memberId] ||= []);
-      if (!arr.some((v) => v.id === view.id)) arr.push(view);
-    };
-
-    // Direction 1: Brief Snapshots → For Team Member.
-    if (forMemberField) {
-      for (const snap of snaps) {
-        const linked = readRaw(snap, forMemberField);
-        if (!Array.isArray(linked)) continue;
-        for (const l of linked) push(idOf(l), viewById[snap.id]);
-      }
-    }
-
-    // Direction 2: Deal Team → Brief Snapshots (inverse link) for robustness.
-    const briefLinkOnTeam = dealTeamTable
-      ? fieldByName(dealTeamTable, 'Brief Snapshots')
-      : null;
-    if (briefLinkOnTeam && dealTeamRecords) {
-      for (const member of dealTeamRecords as unknown as AnyRecord[]) {
-        const linked = readRaw(member, briefLinkOnTeam);
-        if (!Array.isArray(linked)) continue;
-        for (const l of linked) push(member.id, viewById[idOf(l)]);
-      }
-    }
-
-    for (const k of Object.keys(map)) {
-      map[k].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
-    }
-    return map;
-  }, [briefSnapshotsTable, briefSnapshotsRecords, dealTeamTable, dealTeamRecords]);
-
-  // Build briefs grouped by deal record id (for the Kanban deal modal).
-  const briefsByDeal = useMemo(() => {
-    const map: Record<string, BriefView[]> = {};
-    if (!briefSnapshotsTable || !briefSnapshotsRecords) return map;
-
-    const primary = primaryField(briefSnapshotsTable);
-    const dateField = fieldByName(briefSnapshotsTable, 'Snapshot Date');
-    const dealField = fieldByName(briefSnapshotsTable, 'Deal');
-    const memberField = fieldByName(briefSnapshotsTable, 'For Team Member');
-    const bodyFields = fieldsOf(briefSnapshotsTable).filter(
-      (f) =>
-        f.id !== primary?.id &&
-        f.id !== dateField?.id &&
-        String(f.type) !== 'multipleRecordLinks'
-    );
-
-    const viewOf = (snap: AnyRecord): BriefView => {
-      const dateStr = dateField ? readStr(snap, dateField) : '';
-      const memberStr = memberField ? readStr(snap, memberField) : '';
-      return {
-        id: snap.id,
-        title: (primary ? readStr(snap, primary) : '') || dateStr || 'Brief',
-        subtitle: [dateStr, memberStr].filter(Boolean).join('  ·  '),
-        sortKey: String(dateField ? readRaw(snap, dateField) ?? '' : ''),
-        sections: bodyFields
-          .map((f) => ({ label: f.name, value: readStr(snap, f) }))
-          .filter((s) => s.value),
-      };
-    };
-
-    const snaps = briefSnapshotsRecords as unknown as AnyRecord[];
-    if (dealField) {
-      for (const snap of snaps) {
-        const view = viewOf(snap);
-        for (const dealId of linkedIds(snap, dealField)) {
-          const arr = (map[dealId] ||= []);
-          if (!arr.some((v) => v.id === view.id)) arr.push(view);
-        }
-      }
-    }
-    for (const k of Object.keys(map)) {
-      map[k].sort((a, b) => b.sortKey.localeCompare(a.sortKey));
-    }
-    return map;
-  }, [briefSnapshotsTable, briefSnapshotsRecords]);
-
-  // Build pod members (excluding the System Owner = current user / player).
-  const members = useMemo((): Member[] => {
-    if (!dealTeamTable || !dealTeamRecords) return [];
-    const nameField = primaryField(dealTeamTable) ?? fieldByName(dealTeamTable, 'Name');
-    const roleField = fieldByName(dealTeamTable, 'Role');
-    const systemOwnerField = fieldByName(dealTeamTable, 'System Owner');
-
-    return (dealTeamRecords as unknown as AnyRecord[])
-      .filter((rec) => {
-        if (!systemOwnerField) return true;
-        return !readRaw(rec, systemOwnerField);
-      })
-      .map((rec) => ({
-        id: rec.id,
-        name: readStr(rec, nameField) || 'Unnamed',
-        role: roleField ? readStr(rec, roleField) : '',
-        briefs: briefsByMember[rec.id] ?? [],
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [dealTeamTable, dealTeamRecords, briefsByMember]);
-
-  const loading = !dealTeamTable || !dealTeamRecords;
-
-  const navBtn = (
-    key: 'briefs' | 'review' | 'deals' | 'calendar',
-    label: string
-  ) => {
-    const active = view === key;
-    return (
-      <button
-        type="button"
-        onClick={() => setView(key)}
-        style={{
-          cursor: 'pointer',
-          fontSize: 14,
-          fontWeight: 700,
-          padding: '7px 16px',
-          borderRadius: 8,
-          border: `2px solid ${active ? T.border : 'transparent'}`,
-          backgroundColor: active ? T.hint : 'transparent',
-          color: active ? T.text : '#2c3e50',
-        }}
-      >
-        {label}
-      </button>
-    );
-  };
-
-  return (
-    <div
-      style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        backgroundColor: T.bg,
-        fontFamily: FONT,
-        color: T.text,
-      }}
-    >
-      {/* Top bar */}
-      <div
-        style={{
-          flexShrink: 0,
-          backgroundColor: T.headerBar,
-          borderBottom: `2px solid ${T.border}`,
-          padding: '0 24px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 24,
-          height: 60,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 8,
-              backgroundColor: T.accent,
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontWeight: 800,
-              fontSize: 14,
-            }}
-          >
-            D
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Deal Pod Console</div>
-        </div>
-        <div style={{ display: 'flex', gap: 4 }}>
-          {navBtn('briefs', 'Team Briefs')}
-          {navBtn('review', 'Source Review')}
-          {navBtn('deals', 'Deals')}
-          {navBtn('calendar', 'Calendar')}
-        </div>
-      </div>
-
-      {/* Body */}
-      <div style={{ flex: 1, minHeight: 0, padding: 24, display: 'flex', flexDirection: 'column' }}>
-        {errorState ? (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: T.textMuted,
-              fontSize: 14,
-              textAlign: 'center',
-              padding: 24,
-            }}
-          >
-            Open the element's settings panel and bind the Deal Team, Brief
-            Snapshots, and Source Records tables.
-          </div>
-        ) : loading ? (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: T.textMuted,
-              fontSize: 14,
-            }}
-          >
-            Loading…
-          </div>
-        ) : view === 'briefs' ? (
-          <TeamBriefsView members={members} />
-        ) : view === 'review' ? (
-          <SourceReviewView table={sourceRecordsTable} records={sourceRecordsRecords} />
-        ) : view === 'calendar' ? (
-          <CalendarView
-            calendar={calendar}
-            records={calendarRecords}
-            dealOptions={dealOptions}
-            canUpdate={canEdit(calendarTable)}
-          />
-        ) : (
-          <KanbanView
-            table={dealsTable}
-            records={dealsRecords}
-            members={members}
-            briefsByDeal={briefsByDeal}
-            calendar={calendar}
-            eventsByDeal={eventsByDeal}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-initializeBlock({ interface: () => <DealPodConsole /> });
+initializeBlock({ interface: () => <PokeMartInterface /> });
