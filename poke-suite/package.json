@@ -1,0 +1,13 @@
+{
+  "name": "poke-suite",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Two cooperating Airtable interfaces: Poke Kanban and Poke Mart",
+  "scripts": {
+    "setup": "npm ci --prefix apps/poke-kanban && npm ci --prefix apps/poke-mart",
+    "lint": "npm run lint --prefix apps/poke-kanban && npm run lint --prefix apps/poke-mart",
+    "typecheck": "npm run typecheck --prefix apps/poke-kanban && npm run typecheck --prefix apps/poke-mart",
+    "check": "npm run lint && npm run typecheck"
+  }
+}
